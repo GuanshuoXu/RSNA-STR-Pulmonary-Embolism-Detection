@@ -1,0 +1,16 @@
+cd process_input
+sh run.sh
+cd ..
+cd lung_localization/split2
+sh run.sh
+cd ..
+cd ..
+cd seresnext50
+sh run.sh
+cd ..
+cd seresnext101
+sh run.sh
+cd ..
+cd 2nd_level
+sh run.sh
+cd ..

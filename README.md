@@ -13,6 +13,7 @@ numpy 1.17.2
 gdcm 2.8.9
 apex 0.1
 huggingface transformers 2.11.0
+imgaug
 
 Following libraries are used in my code but not required to install:
 https://github.com/Cadene/pretrained-models.pytorch

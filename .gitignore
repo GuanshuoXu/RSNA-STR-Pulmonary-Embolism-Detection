@@ -1,6 +1,8 @@
 input/nohup.out
 input/test/*
 input/train/*
+*.pyc
+trainall/*
 input/sample_submission.csv
 input/test.csv
 input/test/00268ff88746/75d23269adbd/0aef8620785f.dcm

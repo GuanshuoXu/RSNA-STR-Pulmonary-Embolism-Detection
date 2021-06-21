@@ -228,7 +228,7 @@ criterion1 = nn.BCEWithLogitsLoss().cuda()
 
 # training
 
-# iterator for training
+# # iterator for training
 train_datagen = PEDataset(feature_array=feature_train,
                           image_to_feature=image_to_feature_train,
                           series_dict=series_dict,
@@ -348,7 +348,11 @@ for ep in range(num_epoch):
     losses_lt = AverageMeter()
     losses_chronic = AverageMeter()
     losses_acute_and_chronic = AverageMeter()
-    model.eval()
+    model_lv21 = PENet(input_len=feature_size, lstm_size=lstm_size)
+    #model.load_state_dict(torch.load('seresnext50_128'))
+    model = model.cuda()
+    model_lv21.eval()
+    #model.eval()
     for j, (x, y_pe, mask, y_npe, y_idt, y_lpe, y_rpe, y_cpe, y_gte, y_lt, y_chronic, y_acute_and_chronic, series_list) in enumerate(valid_generator):
         with torch.no_grad():
             start = j*batch_size

@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 from efficientnet_pytorch import EfficientNet
 import pickle
+#import gdcm
 import pydicom
 import glob
 
@@ -99,7 +100,9 @@ def main():
 
     # build model
     model = efficientnet()
-    model.load_state_dict(torch.load('weights/epoch34_polyak'))
+    #with open('weights/epoch34.pkl', 'rb') as f:
+       # ep34 = pickle.load(f)
+    model.load_state_dict(torch.load('weights/epoch34'))
     model = model.cuda()
     model.eval()
 
@@ -132,7 +135,10 @@ def main():
     total_loss = 0
     for i in range(len(series_list)*4):
         for j in range(4):
-            total_loss += abs(pred_bbox[i,j]-bbox_dict[selected_image_list_valid[i]][j])
+            try:
+                total_loss += abs(pred_bbox[i,j]-bbox_dict[selected_image_list_valid[i]][j])
+            except:
+                continue
     total_loss = total_loss / len(series_list) / 4 / 4
     print("total loss: ", total_loss)
 

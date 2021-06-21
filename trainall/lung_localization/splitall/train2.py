@@ -124,6 +124,8 @@ def main():
         sorted_image_list = series_dict[series_id]['sorted_image_list']
         num_image = len(sorted_image_list)
         selected_idx = [int(0.2*num_image), int(0.3*num_image), int(0.4*num_image), int(0.5*num_image)]
+        if selected_idx[0]>=len(sorted_image_list):
+            continue
         image_list_train.append(sorted_image_list[selected_idx[0]])
         image_list_train.append(sorted_image_list[selected_idx[1]])
         image_list_train.append(sorted_image_list[selected_idx[2]])
@@ -183,17 +185,17 @@ def main():
                 scaled_loss.backward()
             optimizer.step()
 
-            if args.local_rank == 0:
-                if j==len(generator)-num_polyak:
-                    #print("Polyak averaging start ...")
-                    averaged_model = copy.deepcopy(model)
-                if j>len(generator)-num_polyak:
-                    for k in averaged_model.module.state_dict().keys():
-                        averaged_model.module.state_dict()[k].data += model.module.state_dict()[k].data
-                if j==len(generator)-1:
-                    for k in averaged_model.module.state_dict().keys():
-                        averaged_model.module.state_dict()[k].data /= num_polyak
-                    #print("Polyak averaging end ...")
+            # if args.local_rank == 0:
+            #     if j==len(generator)-num_polyak:
+            #         #print("Polyak averaging start ...")
+            #         averaged_model = copy.deepcopy(model)
+            #     if j>len(generator)-num_polyak:
+            #         for k in averaged_model.module.state_dict().keys():
+            #             averaged_model.module.state_dict()[k].data += model.module.state_dict()[k].data
+            #     if j==len(generator)-1:
+            #         for k in averaged_model.module.state_dict().keys():
+            #             averaged_model.module.state_dict()[k].data /= num_polyak
+            #         #print("Polyak averaging end ...")
 
         if args.local_rank == 0:
             print('epoch: {}, train_loss: {}'.format(ep,losses.avg), flush=True)
@@ -203,7 +205,7 @@ def main():
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
             torch.save(model.module.state_dict(), out_dir+'epoch{}'.format(ep))
-            torch.save(averaged_model.module.state_dict(), out_dir+'epoch{}_polyak'.format(ep))
+            #torch.save(averaged_model.module.state_dict(), out_dir+'epoch{}_polyak'.format(ep))
 
 if __name__ == "__main__":
     main()

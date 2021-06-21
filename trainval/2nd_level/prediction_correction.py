@@ -195,20 +195,20 @@ def check_consistency(sub, test):
 gt_list_seresnext50_128 = np.load('predictions/gt_list_seresnext50_128.npy')
 loss_weight_list_seresnext50_128 = np.load('predictions/loss_weight_list_seresnext50_128.npy')
 pred_prob_list_seresnext50_128 = np.load('predictions/pred_prob_list_seresnext50_128.npy')
-gt_list_seresnext101_128 = np.load('predictions/gt_list_seresnext101_128.npy')
-loss_weight_list_seresnext101_128 = np.load('predictions/loss_weight_list_seresnext101_128.npy')
-pred_prob_list_seresnext101_128 = np.load('predictions/pred_prob_list_seresnext101_128.npy')
+# gt_list_seresnext101_128 = np.load('predictions/gt_list_seresnext101_128.npy')
+# loss_weight_list_seresnext101_128 = np.load('predictions/loss_weight_list_seresnext101_128.npy')
+# pred_prob_list_seresnext101_128 = np.load('predictions/pred_prob_list_seresnext101_128.npy')
 
-gt_list_seresnext50_192 = np.load('predictions/gt_list_seresnext50_192.npy')
-loss_weight_list_seresnext50_192 = np.load('predictions/loss_weight_list_seresnext50_192.npy')
-pred_prob_list_seresnext50_192 = np.load('predictions/pred_prob_list_seresnext50_192.npy')
-gt_list_seresnext101_192 = np.load('predictions/gt_list_seresnext101_192.npy')
-loss_weight_list_seresnext101_192 = np.load('predictions/loss_weight_list_seresnext101_192.npy')
-pred_prob_list_seresnext101_192 = np.load('predictions/pred_prob_list_seresnext101_192.npy')
+# gt_list_seresnext50_192 = np.load('predictions/gt_list_seresnext50_192.npy')
+# loss_weight_list_seresnext50_192 = np.load('predictions/loss_weight_list_seresnext50_192.npy')
+# pred_prob_list_seresnext50_192 = np.load('predictions/pred_prob_list_seresnext50_192.npy')
+# gt_list_seresnext101_192 = np.load('predictions/gt_list_seresnext101_192.npy')
+# loss_weight_list_seresnext101_192 = np.load('predictions/loss_weight_list_seresnext101_192.npy')
+# pred_prob_list_seresnext101_192 = np.load('predictions/pred_prob_list_seresnext101_192.npy')
 
 gt_list = gt_list_seresnext50_128
 loss_weight_list = loss_weight_list_seresnext50_128
-pred_prob_list = (pred_prob_list_seresnext50_128 + pred_prob_list_seresnext101_128) / 2.0
+pred_prob_list = (pred_prob_list_seresnext50_128 )#+ pred_prob_list_seresnext101_128) / 2.0
 
 gt_list1 = torch.tensor(gt_list, dtype=torch.float32)
 loss_weight_list1 = torch.tensor(loss_weight_list, dtype=torch.float32)

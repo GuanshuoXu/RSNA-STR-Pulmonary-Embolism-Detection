@@ -378,14 +378,15 @@ class CIFAR10SSL(datasets.CIFAR10):
 class TransformFixMatch(object):
     def __init__(self, mean, std):
         self.weak = transforms.Compose([
-            transforms.RandomHorizontalFlip()])
-            # transforms.RandomCrop(size=576,
-            #                       padding=int(576*0.125),
-            #                       padding_mode='reflect'),
+            transforms.RandomHorizontalFlip(),#])
+            transforms.RandomCrop(size=576,
+                                  padding=int(576*0.125),
+                                  padding_mode='reflect'),
             #transforms.RandomAffine(20, translate=(0.2,0.2))])
         self.strong = transforms.Compose([
             transforms.RandomHorizontalFlip(),
             transforms.RandomAffine(20, translate=(0.2,0.2)),
+            #transforms.RandomResizedCrop(size=image_size),
             # transforms.CenterCrop(size=image_size*0.75),
             # transforms.Resize((image_size, image_size)),
             transforms.RandomCrop(size=image_size,

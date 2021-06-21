@@ -25,6 +25,7 @@ import copy
 from train0_fix_sigR import pre_train
 from pe0 import get_data
 from transformers import get_linear_schedule_with_warmup
+from torch.utils.tensorboard import SummaryWriter
 from sklearn.metrics import roc_auc_score
 
 
@@ -137,6 +138,10 @@ def main():
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
+
+    if args.local_rank in [-1, 0]:
+        os.makedirs('tensorboard', exist_ok=True)
+        writer = SummaryWriter('tensorboard')
 
     # prepare input
     import pickle
@@ -285,10 +290,11 @@ def main():
     #if args.pos>0:
     #    model2, epoch=pre_train(args)
     epoch=0
-       
+
     if args.local_rank != 0:
         torch.distributed.barrier()
     if args.pos>0:
+         print('loading')
          model = seresnext50()
          model.load_state_dict(torch.load('weights'+args.name+'/' +'epoch{}'.format(epoch),map_location='cpu'))
          in_features = model.net.last_linear.in_features
@@ -393,6 +399,7 @@ def main():
         num_lbl=0
         num_pe=0
         pe_norm=1
+        max_pseudo=0
        # if args.world_size > 1:
         # labeled_epoch = 0
         # unlabeled_epoch = 0
@@ -443,14 +450,15 @@ def main():
             
                  
                 
-            
+            #print(pseudo_label.shape, pseudo_label.max().item())
             max_prob=(pseudo_label.ge(threshold_max).float())
-            max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+            max_, targets_u = torch.max(pseudo_label, dim=-1)
             min_probs, _= torch.min(pseudo_label, dim=-1)
             mask = max_prob + (pseudo_label.lt(threshold_min).float())
             num_pe+=max_prob.sum().item()
             num_lbl+=mask.sum().item()
-            
+            if max_pseudo< pseudo_label.max().item():
+                max_pseudo=pseudo_label.max().item()
             per_pe= 0.06 /((num_pe+1)/ (num_lbl+ 1))
             per_no=0.94/((num_lbl-num_pe+1)/(num_lbl+ 1))
             pe_norm=per_pe /(per_pe+ per_no)
@@ -463,11 +471,19 @@ def main():
             #                       reduction='none') * mask).mean()
             loss = Lx + lambda_u * Lu
             if (args.local_rank == 0) & (i%50==0):
-                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe} max {pseudo_label[max_prob.bool()].mean().item()}')
+                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe} max {max_pseudo} above {pseudo_label[max_prob.bool()].mean().item()}')
                 if args.dist>0:
                     print("dist ", num_lbl,num_pe, per_pe, per_no, pe_norm)
             #print(i, start, end)
             #feature[start:end] = np.squeeze(features.cpu().data.numpy())
+            if args.local_rank in [-1, 0]:         
+
+                    writer.add_scalar('train/1.train_loss', loss.item(), i)
+                    writer.add_scalar('train/2.train_loss_x', Lx.item(), i)
+                    writer.add_scalar('train/3.train_loss_u', Lu.item(), i)
+                    writer.add_scalar('train/4.pe', num_pe/num_lbl, i)
+            # args.writer.add_scalar('test/1.test_acc', test_acc, epoch)
+            # args.writer.add_scalar('test/2.test_loss', test_loss, epoch)
             losses.update(loss.item(), inputs.size(0))
             optimizer.zero_grad()
             with amp.scale_loss(loss, optimizer) as scaled_loss:

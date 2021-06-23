@@ -136,7 +136,8 @@ def main():
         bbox_dict_valid = pickle.load(f)
     print(len(image_list_valid), len(image_dict), len(bbox_dict_valid), len(series_list_train))
     gt_ser=[]
-    data_ratio=0.02
+    gt_img=[]
+    data_ratio=0.2
     count_pos=0
     if data_ratio<1:
         image_list_train=[]
@@ -150,7 +151,7 @@ def main():
             image_list_train += tmp_list
             for img in tmp_list:
                 count_pos+= image_dict[img]['pe_present_on_image']
-                
+                gt_img.append(image_dict[img]['pe_present_on_image'])
     
     
     print('reduced data: ',data_ratio, num_series,len(image_list_train), 'pos ratio: ', count_pos/len(image_list_train))
@@ -225,7 +226,7 @@ def main():
     # hyperparameters
     #image_list_train, samp_lbl=x_u_split_equal(num_series,gt_ser,series_list_train, series_dict, image_dict)
     learning_rate = 0.0002#4
-    batch_size = 8#32
+    batch_size = 16#32
     image_size = 576
     num_epoch = 7#1
     best_auc=0
@@ -236,9 +237,9 @@ def main():
     if args.local_rank == 0:
         torch.distributed.barrier()
     
-    print('bef we')
-    ###model.load_state_dict(torch.load('weights/'+'epoch3'))
-    print('af we')
+    # print('bef we')
+    # model.load_state_dict(torch.load('weights_0.2/'+'epoch1', map_location='cpu'))
+    # print('af we')
     model.to(args.device)
 
     num_train_steps = int(len(image_list_train)/(batch_size*4)*num_epoch)   ##### 4 GPUs

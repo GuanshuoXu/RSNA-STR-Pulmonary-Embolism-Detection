@@ -281,14 +281,14 @@ def main():
     # hyperparameters
     #samp_img, samp_lbl=x_u_split_equal(num_series//10,gt_ser,series_list_train, series_dict, image_dict)
    
-    learning_rate = 0.0002#4
-    batch_size = 8#32
-    image_size = 576
+    learning_rate = 0.0004#4
+    batch_size = 16#32
+    image_size = 432#576
     num_epoch = 7#1
     best_auc=0
     # build model
-    #if args.pos>0:
-    #    model2, epoch=pre_train(args)
+    if args.pos>0:
+       model2, epoch=pre_train(args)
     epoch=0
 
     if args.local_rank != 0:
@@ -386,7 +386,8 @@ def main():
     threshold_min=0.05
     max_prob=0
     name=args.name
-    
+    alpha=0.2/(len(labeled_dataset)/batch_size)
+    fac=1
     
     print(threshold_max, threshold_min, name, 'weights_decay 5e-4')
     print('start trainnnnn')
@@ -414,6 +415,7 @@ def main():
             #if i == len(generator)-1:
              #   end = len(generator.dataset)
             #inputs_x = images.to(args.device)
+
             labels = labels.float().to(args.device)
              
             unlabeled_iter = iter(unlabeled_trainloader)
@@ -471,20 +473,23 @@ def main():
             #                       reduction='none') * mask).mean()
             loss = Lx + lambda_u * Lu
             if (args.local_rank == 0) & (i%50==0):
-                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe} max {max_pseudo} above {pseudo_label[max_prob.bool()].mean().item()}')
+                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/num_lbl} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
                 if args.dist>0:
                     print("dist ", num_lbl,num_pe, per_pe, per_no, pe_norm)
             #print(i, start, end)
             #feature[start:end] = np.squeeze(features.cpu().data.numpy())
+            fac=fac-alpha
             if args.local_rank in [-1, 0]:         
 
                     writer.add_scalar('train/1.train_loss', loss.item(), i)
                     writer.add_scalar('train/2.train_loss_x', Lx.item(), i)
                     writer.add_scalar('train/3.train_loss_u', Lu.item(), i)
-                    writer.add_scalar('train/4.pe', num_pe/num_lbl, i)
+                    writer.add_scalar('train/4.pe', num_pe/(num_lbl+1), i)
             # args.writer.add_scalar('test/1.test_acc', test_acc, epoch)
             # args.writer.add_scalar('test/2.test_loss', test_loss, epoch)
             losses.update(loss.item(), inputs.size(0))
+            losses_x.update(Lx.item())
+            losses_u.update(Lu.item())
             optimizer.zero_grad()
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -492,7 +497,7 @@ def main():
             scheduler.step()
 
        # if args.local_rank == 0:
-        print('epoch: {}, train_loss: {}'.format(ep,losses.avg), flush=True)
+        print('epoch: {}, train_loss: {} Lx: {} Lu: {} '.format(ep,losses.avg,losses_x.avg,losses_u.avg), flush=True)
 #validaion phase
         model.eval()
 

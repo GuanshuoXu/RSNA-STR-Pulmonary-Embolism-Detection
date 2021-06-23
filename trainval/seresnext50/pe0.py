@@ -25,7 +25,7 @@ cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
-image_size = 576#432
+image_size = 432#576#432
 
 seed = 2001
 random.seed(seed)
@@ -101,6 +101,7 @@ class PE_SSL(Dataset):
             #print('unlabeld')
         y = self.image_dict[self.image_list[index]]['pe_present_on_image']
         y_true=self.targets[index]
+
         # if y_true!=y:
         #     print('yyyyyy', y, y_true)
         return x, y_true
@@ -162,27 +163,48 @@ def get_data(args):
     gt_ser=[]
     data_ratio=0.2
     count_pos=0
-    if data_ratio<1:
+
+    def reduce_data(data_ratio, series_list):
         image_list_train=[]
-        num_series= round(data_ratio* len(series_list_train))
-        ser_idx= np.random.choice(len(series_list_train), size=num_series, replace=False)
-        series_list_train=np.array(series_list_train)[ser_idx]
+        gt_ser=[]
+        count_pos=0
+        num_series= round(data_ratio* len(series_list))
+        ser_idx= np.random.choice(len(series_list), size=num_series, replace=False)
+        series_list_train=np.array(series_list)[ser_idx]
         
         for series_id in series_list_train:
             tmp_list=list(series_dict[series_id]['sorted_image_list'])
-            gt_ser.append(series_dict[series_id]['negative_exam_for_pe'])
+            #gt_ser.append(series_dict[series_id]['negative_exam_for_pe'])
             image_list_train += tmp_list
-            for idx,img in enumerate(tmp_list):
-                count_pos+= image_dict[img]['pe_present_on_image']
-                gt_position.append(idx/len(tmp_list))
-                gt_z.append(image_dict[img]['z_pos'])
+        #     for idx,img in enumerate(tmp_list):
+        #         count_pos+= image_dict[img]['pe_present_on_image']
+                # gt_position.append(idx/len(tmp_list))
+                # gt_z.append(image_dict[img]['z_pos'])          
+        #np.save('gt_z',np.array(gt_z))
+        #def get_sets(series_list_train, series_dict, image_dict )
+        
+        return  series_list_train, ser_idx, np.array(image_list_train)
+    ser_list_train, ser_idx, train_images=reduce_data(data_ratio, series_list_train)
+    data_ratio=0.1
+    if data_ratio<1:
+        s_list_train, s_idx,_=reduce_data(data_ratio, ser_list_train)
+        # image_list_train=[]
+        # num_series= round(data_ratio* len(series_list_train))
+        # ser_idx= np.random.choice(len(series_list_train), size=num_series, replace=False)
+        # series_list_train=np.array(series_list_train)[ser_idx]
+        
+        # for series_id in series_list_train:
+        #     tmp_list=list(series_dict[series_id]['sorted_image_list'])
+        #     gt_ser.append(series_dict[series_id]['negative_exam_for_pe'])
+        #     image_list_train += tmp_list
+        #     for idx,img in enumerate(tmp_list):
+        #         count_pos+= image_dict[img]['pe_present_on_image']
+        #         gt_position.append(idx/len(tmp_list))
+        #         gt_z.append(image_dict[img]['z_pos'])
                 
-                
-    np.save('gt_z',np.array(gt_z))
-    #def get_sets(series_list_train, series_dict, image_dict )
-    print('reduced data: ',num_series,len(image_list_train), 'pos ratio: ', count_pos/len(image_list_train))
+
     
-    num_labeled = len(series_list_train) // 10
+    #num_labeled = len(ser_list_train) // 10
     if args.pos>0:
         three=True#False
         type='pos'
@@ -194,22 +216,33 @@ def get_data(args):
         type='pe'
         three=True
     win=(args.win>0)
-    targets, train_images, targets_ser=get_labels(series_list_train, series_dict, image_dict, type)
-    print('ttt', len(targets), len(train_images))
-    if args.up> 0.05:
-        train_labeled_img, targets_labeled, train_unlabeled_idxs= x_u_split_equal(args.up,num_labeled, targets_ser,series_list_train, series_dict, image_dict)
-    #train_unlabeled_idxs = np.array(range(len(targets)))
-    else:
-        train_labeled_img, train_unlabeled_idxs, targets_labeled = x_u_split(num_labeled, targets, targets_ser,series_list_train, series_dict, image_dict)
+    
+    
+    
+    #else:
+        #train_labeled_img, train_unlabeled_idxs, targets_labeled = x_u_split(num_labeled, targets, targets_ser,ser_list_train, series_dict, image_dict)
     if args.pos>0:
-        train_labeled_img=train_images
-        targets_labeled=targets
+        targets_labeled, train_labeled_img, targets_ser=get_labels(ser_list_train, series_dict, image_dict, type)
+        print('ttt', len(targets_labeled), len(train_labeled_img))#, len(train_images))
+   
+        #train_labeled_img=train_images
+        #targets_labeled=targets
         train_unlabeled_dataset=None
     else:
-        targets=np.array(targets)
-        np.save('targets', targets)
-        train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=train_images[train_unlabeled_idxs], target_size=image_size, targets=targets[train_unlabeled_idxs],transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)
+        targets_labeled, train_labeled_img, targets_ser=get_labels(s_list_train, series_dict, image_dict, type)
+        print('ttt', len(targets_labeled), len(train_labeled_img), len(train_images))
+   
+        #dummy targets for unlabeld
+        targets=np.arange(len(train_images))#np.array(targets_labeled)
+        train_unlabeled_idxs = x_u_split(s_idx, ser_list_train)#np.arange(len(train_images))
+        targets, unlbl_img, _= get_labels(ser_list_train[train_unlabeled_idxs], series_dict, image_dict)
+        print(unlbl_img.shape[0])
+        train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)
      #### cifar mean
+    if args.up> 0.05:
+        train_labeled_img, targets_labeled= x_u_split_equal(args.up, np.array(targets_labeled), train_labeled_img)#, series_dict, image_dict)#targets_ser,s_list_train,
+    
+    np.save('targets', targets_labeled)
     train_labeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=train_labeled_img, target_size=image_size, targets=targets_labeled,transform=transform_labeled,three=three,win=win)
     print('bbbb unnnn')
     
@@ -222,6 +255,8 @@ def get_labels(series_list, series_dict, image_dict, type='pe'):
     gt_list=[]
     gt_ser=[]
     image_lst=[] 
+    count_pe=0
+    #np.random.shuffle(labeled_idx)
     for n in tqdm(range(len(series_list))):
         gt_ser.append(series_dict[series_list[n]]['negative_exam_for_pe'])
         image_list_ser = series_dict[series_list[n]]['sorted_image_list']
@@ -229,22 +264,25 @@ def get_labels(series_list, series_dict, image_dict, type='pe'):
         for m in range(len(image_list_ser)):
             if type=='pe':
                 gt_list.append(image_dict[image_list_ser[m]]['pe_present_on_image'])
+                count_pe+=gt_list[-1]
             elif type=='pos':
                 gt_list.append(m/len(image_list_ser))
+               
             else:
                 gt_list.append(image_dict[image_list_ser[m]]['z_pos'])
+    print('reduced data: ',len(series_list),'# lables: ',len(image_lst), 'pe ratio: ', count_pe/len(image_lst))
     return gt_list, np.array(image_lst), gt_ser
 
-def x_u_split_equal(ratio,num_labeled, labels_ser, series_list, series_dict, image_dict):
+def x_u_split_equal(ratio,targets, img_list):#,labels_ser, series_list, series_dict, image_dict):
         total=0
         num_classes=2 ###########
-        ratio=ratio
-        num_pe=int(ratio*num_labeled)
-        label_per_class = [num_pe, num_labeled-num_pe]#]np.array(, (1-ratio)*num_labeled], dtype=int)
-        print(label_per_class)
-        #labels = np.array(labels)
-        labels_ser = np.array(labels_ser)
-        unlabeled_idx = []
+        
+        # num_pe=int(ratio*len(labels_ser))
+        # label_per_class = [num_pe, len(labels_ser)-num_pe]#]np.array(, (1-ratio)*num_labeled], dtype=int)
+        # print(label_per_class)
+        # #labels = np.array(labels)
+        # labels_ser = np.array(labels_ser)
+        # unlabeled_idx = []
 
         img_pe=[]
         img_non_pe=[]
@@ -256,57 +294,66 @@ def x_u_split_equal(ratio,num_labeled, labels_ser, series_list, series_dict, ima
         # unlabeled data: all data (https://github.com/kekmodel/FixMatch-pytorch/issues/10)
         #unlabeled_idx = np.array(range(len(labels)))
         
-        for i in range(num_classes):
-            idx = np.where(labels_ser == i)[0]
-            
-            idx_lbl = np.random.choice(idx, label_per_class[i], False)
-            unlabeled_idx+=[x for x in idx if not x in idx_lbl]
-            print('lllll', labels_ser.shape, idx_lbl.shape)
-            for j in idx_lbl:
-                #images for series j
-                images=np.array(series_dict[series_list[j]]['sorted_image_list'])
-                total+=len(images)
-                #labeled_img_list+=images
-                images_lbls=np.zeros(len(images), dtype=int)
-                for m in range(len(images)):
-                    images_lbls[m]=image_dict[images[m]]['pe_present_on_image']
+        # for i in range(num_classes):
+        #     idx = np.where(labels_ser == i)[0]
+        #     print('lllll', label_per_class[i], idx.shape)
+        #     idx_lbl = np.random.choice(idx, label_per_class[i], replace=(i==0))
+        #     #unlabeled_idx+=[x for x in idx if not x in idx_lbl]
+           
+        #     for j in idx_lbl:
+        #         #images for series j
+        #         images=np.array(series_dict[series_list[j]]['sorted_image_list'])
+        #         total+=len(images)
+        #         #labeled_img_list+=images
+        #         images_lbls=np.zeros(len(images), dtype=int)
+        #         for m in range(len(images)):
+        #             images_lbls[m]=image_dict[images[m]]['pe_present_on_image']
                      
-                #idx_class=np.where(images_lbls==i)[0]
-                idx_class=(images_lbls==i)
-               # print('444',idx_class.shape, images_lbls.shape, images_lbls[~idx_class].shape,images_lbls[idx_class].shape)
-                gt_labeled[i].append(images_lbls[idx_class])
-                labeled_img_list[i].append(images[idx_class])
-                gt_labeled[(i+1)%2].append(images_lbls[~idx_class])
-                #print('nu', np.concatenate(gt_labeled[0]).shape, np.concatenate(gt_labeled[1]).shape)
-                labeled_img_list[(i+1)%2].append(images[~idx_class])
-                    #gt_labeled.append(ser_lbls)
+        #         #idx_class=np.where(images_lbls==i)[0]
+        #         idx_class=(images_lbls==i)
+        #        # print('444',idx_class.shape, images_lbls.shape, images_lbls[~idx_class].shape,images_lbls[idx_class].shape)
+        #         gt_labeled[i].append(images_lbls[idx_class])
+        #         labeled_img_list[i].append(images[idx_class])
+        #         gt_labeled[(i+1)%2].append(images_lbls[~idx_class])
+        #         #print('nu', np.concatenate(gt_labeled[0]).shape, np.concatenate(gt_labeled[1]).shape)
+        #         labeled_img_list[(i+1)%2].append(images[~idx_class])
+        #             #gt_labeled.append(ser_lbls)
 
         #
             #labeled_idx.extend(idx)
         
         #assert len(labeled_idx) == num_labeled
-        unlabeled_idx = np.array(unlabeled_idx)
-        print('unlabel',unlabeled_idx.shape)
-        num_slices=[total-int(total*ratio), int(total*ratio)]
+        #unlabeled_idx = np.array(unlabeled_idx)
+        #print('unlabel',unlabeled_idx.shape)
+        total=len(targets)
+        slice4class=[total-int(total*ratio), int(total*ratio)]
         lst_img=[]
         lst_lbl=[]
         for i in [0,1]:
             #print(num_pe, np.concatenate(gt_labeled[0]).shape, np.concatenate(gt_labeled[1]).shape)
-            gt_labeled[i]=np.concatenate(gt_labeled[i])
+            idx = np.where(targets == i)[0]
+            print('lllll', slice4class[i], idx.shape)
+            idx_lbl = np.random.choice(idx, slice4class[i], replace=(i==1))
+            # gt_labeled[i]=np.concatenate(gt_labeled[i])
             
-            labeled_img_list[i]=np.concatenate(labeled_img_list[i])
-            idx=np.random.choice(gt_labeled[i].size, num_slices[i], replace=(i==1))
-            print("3333", idx.shape, gt_labeled[i][idx].shape, num_pe, gt_labeled[i].size)
-            lst_lbl.append(gt_labeled[i][idx])
-            lst_img.append(labeled_img_list[i][idx])
+            # labeled_img_list[i]=np.concatenate(labeled_img_list[i])
+            # idx=np.random.choice(gt_labeled[i].size, num_slices[i], replace=(i==1))
+            print("3333", idx.shape, idx_lbl.shape)#, num_pe, gt_labeled[i].size)
+            lst_lbl.append(targets[idx_lbl])
+            lst_img.append(img_list[idx_lbl])
         #print(lst_img[0].shape, lst_img[1].shape)    
         labeled_img_arr=np.concatenate(lst_img)
         gt_labeled=np.concatenate(lst_lbl)
         # labeled_idx = np.array(labeled_idx)
         print("bbbbb", gt_labeled.shape, gt_labeled.sum(), labeled_img_arr.shape)
-        return labeled_img_arr, gt_labeled, unlabeled_idx
+        return labeled_img_arr, gt_labeled#, unlabeled_idx
+def x_u_split(lbl_ser_idx, ser_list):
+     
+    unlabeled_idx=[x for x in range(len(ser_list)) if not x in lbl_ser_idx]
+    print("unlabeld ",len(unlabeled_idx))
+    return np.array(unlabeled_idx)
 
-def x_u_split(num_labeled, labels, labels_ser, series_list, series_dict, image_dict):
+def x_u_split_old(num_labeled, labels, labels_ser, series_list, series_dict, image_dict):
     num_classes=2 ###########
     label_per_class =num_labeled // num_classes
     #labels = np.array(labels)
@@ -378,20 +425,20 @@ class CIFAR10SSL(datasets.CIFAR10):
 class TransformFixMatch(object):
     def __init__(self, mean, std):
         self.weak = transforms.Compose([
-            transforms.RandomHorizontalFlip(),#])
-            transforms.RandomCrop(size=576,
-                                  padding=int(576*0.125),
-                                  padding_mode='reflect'),
+            transforms.RandomHorizontalFlip()])
+            # transforms.RandomCrop(size=576,
+            #                       padding=int(576*0.125),
+            #                       padding_mode='reflect')])
             #transforms.RandomAffine(20, translate=(0.2,0.2))])
         self.strong = transforms.Compose([
             transforms.RandomHorizontalFlip(),
             transforms.RandomAffine(20, translate=(0.2,0.2)),
             #transforms.RandomResizedCrop(size=image_size),
-            # transforms.CenterCrop(size=image_size*0.75),
-            # transforms.Resize((image_size, image_size)),
-            transforms.RandomCrop(size=image_size,
-                                  padding=int(image_size*0.125),
-                                  padding_mode='reflect'),
+            transforms.CenterCrop(size=image_size*0.75),
+            transforms.Resize((image_size, image_size)),
+            # transforms.RandomCrop(size=image_size,
+            #                       padding=int(image_size*0.125),
+            #                       padding_mode='reflect'),
             RandAugmentMC(n=2, m=10)])
         self.normalize = transforms.Compose([
             transforms.ToTensor(),

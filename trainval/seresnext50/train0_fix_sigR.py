@@ -205,7 +205,7 @@ def pre_train(args):
             inputs_x = inputs_x.to(args.device)
             labels = labels.float().to(args.device)
              
-            
+             
            # features, logits_x= model(images)
             batch_size = inputs_x.shape[0]
              

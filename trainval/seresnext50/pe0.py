@@ -25,7 +25,7 @@ cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
-image_size = 432#576#432
+image_size = 576#432
 
 seed = 2001
 random.seed(seed)
@@ -138,17 +138,17 @@ def get_data(args):
         series_dict = pickle.load(f)
     ###########
     #fix match
-    transform_labeled_fix = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=32,
-                              padding=int(32*0.125),
-                              padding_mode='reflect'),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
+    # transform_labeled_fix = transforms.Compose([
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.RandomCrop(size=32,
+    #                           padding=int(32*0.125),
+    #                           padding_mode='reflect'),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
 
-    transform_val = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
+    # transform_val = transforms.Compose([
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
     #base_dataset= PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=image_list_train, target_size=image_size)#, transform=train_transform)
     #kaggle
     transform_labeled = albumentations.Compose([
@@ -231,10 +231,11 @@ def get_data(args):
     else:
         targets_labeled, train_labeled_img, targets_ser=get_labels(s_list_train, series_dict, image_dict, type)
         print('ttt', len(targets_labeled), len(train_labeled_img), len(train_images))
-   
+        np.save("images_02", train_labeled_img)
+        np.save('targets_02', targets_labeled)
         #dummy targets for unlabeld
         targets=np.arange(len(train_images))#np.array(targets_labeled)
-        train_unlabeled_idxs = x_u_split(s_idx, ser_list_train)#np.arange(len(train_images))
+        train_unlabeled_idxs = np.arange(len(ser_list_train))#x_u_split(s_idx, ser_list_train)#
         targets, unlbl_img, _= get_labels(ser_list_train[train_unlabeled_idxs], series_dict, image_dict)
         print(unlbl_img.shape[0])
         train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)
@@ -242,7 +243,7 @@ def get_data(args):
     if args.up> 0.05:
         train_labeled_img, targets_labeled= x_u_split_equal(args.up, np.array(targets_labeled), train_labeled_img)#, series_dict, image_dict)#targets_ser,s_list_train,
     
-    np.save('targets', targets_labeled)
+    
     train_labeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=train_labeled_img, target_size=image_size, targets=targets_labeled,transform=transform_labeled,three=three,win=win)
     print('bbbb unnnn')
     
@@ -433,9 +434,9 @@ class TransformFixMatch(object):
         self.strong = transforms.Compose([
             transforms.RandomHorizontalFlip(),
             transforms.RandomAffine(20, translate=(0.2,0.2)),
-            #transforms.RandomResizedCrop(size=image_size),
-            transforms.CenterCrop(size=image_size*0.75),
-            transforms.Resize((image_size, image_size)),
+            transforms.RandomResizedCrop(size=image_size),
+            #transforms.CenterCrop(size=image_size*0.75),
+           # transforms.Resize((image_size, image_size)),
             # transforms.RandomCrop(size=image_size,
             #                       padding=int(image_size*0.125),
             #                       padding_mode='reflect'),

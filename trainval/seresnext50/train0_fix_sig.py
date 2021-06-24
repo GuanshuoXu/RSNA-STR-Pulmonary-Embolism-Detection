@@ -112,6 +112,7 @@ def de_interleave(x, size):
     s = list(x.shape)
     return x.reshape([size, -1] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
@@ -124,6 +125,8 @@ def main():
     parser.add_argument("--win", type=int, default=-1, help="different windows")
     parser.add_argument("--pos", type=int, default=-1, help="pre train position")
     parser.add_argument("--z", type=int, default=-1, help="pre train z value")
+    parser.add_argument("--dh", type=int, default=-1, help="dynamic threshold")
+    parser.add_argument("--pre", type=int, default=-1, help="pre-train supervised")
     parser.add_argument("--resume", type=int, default=-1, help="resume")
     #image size, tal, lr ,reg ,up pe ratio
     args = parser.parse_args()
@@ -278,12 +281,26 @@ def main():
             pt = torch.exp(-BCE_loss)
             F_loss = at*(1-pt)**self.gamma * BCE_loss
             return F_loss.mean()
+
+    def train_sup(inputs, labels):
+        _, logits_x=model(inputs)
+        Lx=criterion(logits_x.view(-1), labels)
+        if (args.local_rank == 0) & (i%50==0):
+                print(f'loss_: {Lx.item()}')#, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
+      
+        losses_x.update(Lx.item(),  inputs.size(0))
+            
+        optimizer.zero_grad()
+        with amp.scale_loss(Lx, optimizer) as scaled_loss:
+            scaled_loss.backward()
+        optimizer.step()
+        scheduler.step()
     # hyperparameters
     #samp_img, samp_lbl=x_u_split_equal(num_series//10,gt_ser,series_list_train, series_dict, image_dict)
    
-    learning_rate = 0.0004#4
-    batch_size = 16#32
-    image_size = 432#576
+    learning_rate = 0.0002#4
+    batch_size = 8#16#32
+    image_size = 576
     num_epoch = 7#1
     best_auc=0
     # build model
@@ -321,7 +338,7 @@ def main():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     print('cre')
     if args.fl >0:
-        criterion = WeightedFocalLoss(alpha=0.2, gamma=1).to(args.device)#
+        criterion = WeightedFocalLoss(alpha=0.33, gamma=1).to(args.device)#
     else:
         criterion=nn.BCEWithLogitsLoss().to(args.device)
 
@@ -372,7 +389,7 @@ def main():
     # #print(len(generator), len(datagen))
     print('iterator for validation')
     ######
-    image_list_valid=image_list_valid[:20000]
+    image_list_valid=image_list_valid[:10000]
     datagenV = PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=image_list_valid, target_size=image_size)
     generatorV = DataLoader(dataset=datagenV, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
     
@@ -380,18 +397,18 @@ def main():
     #feature = np.zeros((len(image_list_train), 2048),dtype=np.float32)
     feature_val = np.zeros((len(image_list_valid), 2048),dtype=np.float32)
     pred_prob = np.zeros((len(image_list_valid),),dtype=np.float32)
-    lambda_u=1
+    lambda_u=0.5#1
     T=1
     threshold_max=args.max
-    threshold_min=0.05
+    threshold_min=0.02 ##
     max_prob=0
     name=args.name
-    alpha=0.2/(len(labeled_dataset)/batch_size)
-    fac=1
+    alpha=2*0.2/(len(labeled_dataset)/batch_size)
     
-    print(threshold_max, threshold_min, name, 'weights_decay 5e-4')
+    print('weak H strong H AFF RERACR')
+    print(threshold_max, threshold_min, name, 'weights_decay 5e-4', learning_rate, batch_size, )
     print('start trainnnnn')
-    for ep in range(1,num_epoch):
+    for ep in range(0,num_epoch):
         losses = AverageMeter()
          
         losses_x = AverageMeter()
@@ -407,8 +424,14 @@ def main():
         labeled_trainloader.sampler.set_epoch(ep)
         unlabeled_trainloader.sampler.set_epoch(ep)
         ###############################
-         
+        fac=1
+        eta=1
         model.train()
+        if ep>0:
+            threshold_min=0.05
+            lambda_u=1
+            if args.pre >0 :
+                batch_size=8
         for i,(inputs_x,labels) in tqdm(enumerate(labeled_trainloader)):
             start = i*batch_size
             end = start+batch_size
@@ -418,6 +441,9 @@ def main():
 
             labels = labels.float().to(args.device)
              
+            if args.pre>0:
+                train_sup(inputs_x.to(args.device), labels)
+                continue
             unlabeled_iter = iter(unlabeled_trainloader)
             (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
            # features, logits_x= model(images)
@@ -450,7 +476,8 @@ def main():
                 
                 pseudo_label=pe_norm* pseudo_label
             
-                 
+            if args.dt>0:
+                threshold_max=eta*threshold_max     
                 
             #print(pseudo_label.shape, pseudo_label.max().item())
             max_prob=(pseudo_label.ge(threshold_max).float())
@@ -465,6 +492,7 @@ def main():
             per_no=0.94/((num_lbl-num_pe+1)/(num_lbl+ 1))
             pe_norm=per_pe /(per_pe+ per_no)
             
+
            # print('probs:',logits_u_w.detach()/args.T)#, max_probs[:20])
             Lu= (F.binary_cross_entropy_with_logits(logits_u_s.view(-1), pseudo_label.view(-1),  reduction='none') * mask).mean()
             #Lu = (nn.BCEWithLogitsLoss(logits_u_s, targets_u.float(),  reduction='none') )#* mask).mean()
@@ -473,12 +501,13 @@ def main():
             #                       reduction='none') * mask).mean()
             loss = Lx + lambda_u * Lu
             if (args.local_rank == 0) & (i%50==0):
-                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/num_lbl} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
+                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
                 if args.dist>0:
                     print("dist ", num_lbl,num_pe, per_pe, per_no, pe_norm)
             #print(i, start, end)
             #feature[start:end] = np.squeeze(features.cpu().data.numpy())
             fac=fac-alpha
+            eta=fac**(1-pe_norm)
             if args.local_rank in [-1, 0]:         
 
                     writer.add_scalar('train/1.train_loss', loss.item(), i)
@@ -538,7 +567,7 @@ def main():
         print()
 
         if args.local_rank == 0:
-            out_dir = 'weights'+name+'/'
+            out_dir = 'test10/weights'+name+'/'
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
             if auc>best_auc:
@@ -547,7 +576,7 @@ def main():
                 torch.save(model.module.state_dict(), out_dir+'epoch{}'.format(ep))
                 torch.save(optimizer.state_dict(), out_dir+'opt_epoch{}'.format(ep))
                 torch.save(scheduler.state_dict(), out_dir+'scd_epoch{}'.format(ep))
-                out_dir = 'features0'+name+'/'
+                out_dir = 'test10/features0'+name+'/'
                 if not os.path.exists(out_dir):
                     os.makedirs(out_dir)
                 #np.save(out_dir+'feature_train', feature)

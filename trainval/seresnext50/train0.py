@@ -135,26 +135,27 @@ def main():
     with open('../lung_localization/split2/bbox_dict_valid.pickle', 'rb') as f:
         bbox_dict_valid = pickle.load(f)
     print(len(image_list_valid), len(image_dict), len(bbox_dict_valid), len(series_list_train))
-    gt_ser=[]
-    gt_img=[]
-    data_ratio=0.2
-    count_pos=0
-    if data_ratio<1:
-        image_list_train=[]
-        num_series= round(data_ratio* len(series_list_train))
-        ser_idx= np.random.choice(len(series_list_train), size=num_series, replace=False)
+    # gt_ser=[]
+    # gt_img=[]
+    data_ratio=0.02
+    # count_pos=0
+    # if data_ratio<1:
+    #     image_list_train=[]
+    #     num_series= round(data_ratio* len(series_list_train))
+    #     ser_idx= np.random.choice(len(series_list_train), size=num_series, replace=False)
         
-        series_list_train=np.array(series_list_train)
-        for series_id in series_list_train[ser_idx]:
-            tmp_list=list(series_dict[series_id]['sorted_image_list'])
-            gt_ser.append(series_dict[series_id]['negative_exam_for_pe'])
-            image_list_train += tmp_list
-            for img in tmp_list:
-                count_pos+= image_dict[img]['pe_present_on_image']
-                gt_img.append(image_dict[img]['pe_present_on_image'])
+    #     series_list_train=np.array(series_list_train)
+    #     for series_id in series_list_train[ser_idx]:
+    #         tmp_list=list(series_dict[series_id]['sorted_image_list'])
+    #         gt_ser.append(series_dict[series_id]['negative_exam_for_pe'])
+    #         image_list_train += tmp_list
+    #         for img in tmp_list:
+    #             count_pos+= image_dict[img]['pe_present_on_image']
+    #             gt_img.append(image_dict[img]['pe_present_on_image'])
     
-    
-    print('reduced data: ',data_ratio, num_series,len(image_list_train), 'pos ratio: ', count_pos/len(image_list_train))
+    image_list_train=list(np.load('images_02.npy'))
+    targets=np.load('targets_02.npy')
+    print('reduced data: ',data_ratio, len(image_list_train), 'pos ratio: ', targets.sum()/len(image_list_train))
     def x_u_split_equal(num_labeled, labels_ser, series_list, series_dict, image_dict):
         total=0
         num_classes=2 ###########
@@ -226,7 +227,7 @@ def main():
     # hyperparameters
     #image_list_train, samp_lbl=x_u_split_equal(num_series,gt_ser,series_list_train, series_dict, image_dict)
     learning_rate = 0.0002#4
-    batch_size = 16#32
+    batch_size = 16
     image_size = 576
     num_epoch = 7#1
     best_auc=0
@@ -244,7 +245,7 @@ def main():
 
     num_train_steps = int(len(image_list_train)/(batch_size*4)*num_epoch)   ##### 4 GPUs
     print('num train steps:', num_train_steps)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_train_steps)
     print('opt')
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
@@ -304,7 +305,9 @@ def main():
         model.eval()
 
         pos=0
+        count=0
         y_true=[]
+        auc=0
         losses = AverageMeter()
         for i, (images, labels) in tqdm(enumerate(generatorV)):
             with torch.no_grad():
@@ -315,24 +318,31 @@ def main():
                 images = images.cuda()
                 labels = labels.float().cuda()
 
+                count+=images.shape[0]
                 features, logits = model(images)
                 loss = criterion(logits.view(-1),labels)
                 losses.update(loss.item(), images.size(0))
                 pred_prob[start:end] = np.squeeze(logits.sigmoid().cpu().data.numpy())
                 lbl_num=labels.cpu().detach().numpy().reshape(-1)
-                if lbl_num.sum()>0.0:
-                    #print(lbl_num)
-                    pos+=lbl_num.sum()
-                    idx=np.where(lbl_num>0)
-                    print(lbl_num.sum(), pred_prob[idx].mean())
-
+                # if lbl_num.sum()>0.0:
+                #     #print(lbl_num)
+                #     pos+=lbl_num.sum()
+                #     idx=np.where(lbl_num>0)
+                #    # print(lbl_num.sum(), pred_prob[idx].mean())
+               
                 y_true.append(lbl_num)
+                if (count >= 10000) & (auc==0):
+                    y_10=np.concatenate(y_true)
+                    print('cnt10', count ,'pe', y_10.sum()/y_10.shape[0])
                 #feature_val[start:end] = np.squeeze(features.cpu().data.numpy())
+                    auc = roc_auc_score(y_10, pred_prob[:count])
+        
+                    print('loss:{}, auc:{}'.format(losses.avg, auc), flush=True)
         y_true=np.concatenate(y_true)
         label = np.zeros((len(image_list_valid),),dtype=int)        
-        for i in range(len(image_list_valid)):
-            label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
-        print('pos:', label.sum()/20000, pos)
+        # for i in range(len(image_list_valid)):
+        #     label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
+        # print('pos:', label.sum()/20000, pos)
         auc = roc_auc_score(y_true, pred_prob)
         #if args.local_rank == 0:
         print("checkpoint {} ...".format(ep))

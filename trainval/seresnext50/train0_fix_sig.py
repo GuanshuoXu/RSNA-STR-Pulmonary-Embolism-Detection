@@ -125,9 +125,10 @@ def main():
     parser.add_argument("--win", type=int, default=-1, help="different windows")
     parser.add_argument("--pos", type=int, default=-1, help="pre train position")
     parser.add_argument("--z", type=int, default=-1, help="pre train z value")
-    parser.add_argument("--dh", type=int, default=-1, help="dynamic threshold")
+    parser.add_argument("--dt", type=int, default=-1, help="dynamic threshold")
     parser.add_argument("--pre", type=int, default=-1, help="pre-train supervised")
     parser.add_argument("--resume", type=int, default=-1, help="resume")
+    parser.add_argument("--ep0", type=int, default=0, help="first epoch - for resume")
     #image size, tal, lr ,reg ,up pe ratio
     args = parser.parse_args()
     torch.cuda.set_device(args.local_rank)
@@ -139,8 +140,10 @@ def main():
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed(seed) # if cuda
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark =False
 
     if args.local_rank in [-1, 0]:
         os.makedirs('tensorboard', exist_ok=True)
@@ -301,12 +304,12 @@ def main():
     learning_rate = 0.0002#4
     batch_size = 8#16#32
     image_size = 576
-    num_epoch = 7#1
+    num_epoch = 10#1
     best_auc=0
     # build model
     if args.pos>0:
        model2, epoch=pre_train(args)
-    epoch=0
+    epoch0=args.ep0#0
 
     if args.local_rank != 0:
         torch.distributed.barrier()
@@ -322,18 +325,27 @@ def main():
         torch.distributed.barrier()
     
     print('bef res')
-    if args.resume >0:
-        model.load_state_dict(torch.load('weightsmore_aug_wd_th/'+'epoch5',map_location='cpu'))
+    
         #model.cuda()
     print('af res')
     model=model.to(args.device) or None
-    args.pos=-1
+     
     labeled_dataset, unlabeled_dataset, test_dataset = get_data(args)
     num_train_steps = int(len(labeled_dataset)/(batch_size*4)*num_epoch)   ##### 4 GPUs
     #print('num train steps:', num_train_steps)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4) #1e-4
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_train_steps)
     print('opt')
+    
+    if args.resume >0:
+        print('loading resumed')
+        checkpoint='test10/weightsdef_new/'+'epoch6'
+        model.load_state_dict(torch.load(checkpoint,map_location='cpu'))
+        
+        optimizer.load_state_dict(torch.load(checkpoint))
+        scheduler.load_state_dict(torch.load(checkpoint))
+
+    model=model.to(args.device) or None   
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     print('cre')
@@ -397,18 +409,18 @@ def main():
     #feature = np.zeros((len(image_list_train), 2048),dtype=np.float32)
     feature_val = np.zeros((len(image_list_valid), 2048),dtype=np.float32)
     pred_prob = np.zeros((len(image_list_valid),),dtype=np.float32)
-    lambda_u=0.5#1
+    lambda_u=1##0.5#1
     T=1
     threshold_max=args.max
-    threshold_min=0.02 ##
+    threshold_min=0.05 ##0.02
     max_prob=0
     name=args.name
     alpha=2*0.2/(len(labeled_dataset)/batch_size)
     
     print('weak H strong H AFF RERACR')
-    print(threshold_max, threshold_min, name, 'weights_decay 5e-4', learning_rate, batch_size, )
+    print(threshold_max, threshold_min, name, 'weights_decay 5e-4', learning_rate, batch_size )
     print('start trainnnnn')
-    for ep in range(0,num_epoch):
+    for ep in range(epoch0,num_epoch+epoch0):
         losses = AverageMeter()
          
         losses_x = AverageMeter()
@@ -559,7 +571,7 @@ def main():
         label = np.zeros((len(image_list_valid),),dtype=int)        
         for i in range(len(image_list_valid)):
             label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
-        print('pos:', label.sum()/20000, pos)
+        print('pos:', label.sum()/label.shape[0], pos)
         auc = roc_auc_score(y_true, pred_prob)
         #if args.local_rank == 0:
         print("checkpoint {} ...".format(ep))
@@ -584,6 +596,7 @@ def main():
                 np.save(out_dir+'pred_prob_valid', pred_prob)
                 np.save(out_dir+'y_true', y_true)
                 
-
+    if args.local_rank in [-1, 0]:  
+        writer.close()
 if __name__ == "__main__":
     main()

@@ -229,13 +229,17 @@ def get_data(args):
         #targets_labeled=targets
         train_unlabeled_dataset=None
     else:
-        targets_labeled, train_labeled_img, targets_ser=get_labels(s_list_train, series_dict, image_dict, type)
-        print('ttt', len(targets_labeled), len(train_labeled_img), len(train_images))
-        np.save("images_02", train_labeled_img)
-        np.save('targets_02', targets_labeled)
+        if args.resume>0:
+             train_labeled_img=np.load('images_02.npy')
+             targets_labeled=np.load('targets_02.npy')
+        else:
+            targets_labeled, train_labeled_img, targets_ser=get_labels(s_list_train, series_dict, image_dict, type)
+            print('ttt', len(targets_labeled), len(train_labeled_img), len(train_images))
+            np.save("images_02", train_labeled_img)
+            np.save('targets_02', targets_labeled)
         #dummy targets for unlabeld
         targets=np.arange(len(train_images))#np.array(targets_labeled)
-        train_unlabeled_idxs = np.arange(len(ser_list_train))#x_u_split(s_idx, ser_list_train)#
+        train_unlabeled_idxs = x_u_split(s_idx, ser_list_train)# np.arange(len(ser_list_train)) #12:17
         targets, unlbl_img, _= get_labels(ser_list_train[train_unlabeled_idxs], series_dict, image_dict)
         print(unlbl_img.shape[0])
         train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)

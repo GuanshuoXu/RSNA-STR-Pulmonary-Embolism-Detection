@@ -119,16 +119,17 @@ def main():
     parser.add_argument("--dist", type=int, default=-1, help="use dist alignment")
     parser.add_argument("--fl", type=int, default=-1, help="use focal loss")
     parser.add_argument("--max", type=float, default=0.9, help="max threshold")
+    parser.add_argument("--min", type=float, default=0.05, help="min threshold")
     parser.add_argument("--mu", type=int, default=1, help="ratio of unlabeled in batch")
-    parser.add_argument("--name", type=str, default="fix9", help="local_rank for distributed training on gpus")
+    parser.add_argument("--name", type=str, default="fix9", help="name for identification")
     parser.add_argument("--up", type=float, default=0.05, help="upsample ratio")
     parser.add_argument("--win", type=int, default=-1, help="different windows")
     parser.add_argument("--pos", type=int, default=-1, help="pre train position")
     parser.add_argument("--z", type=int, default=-1, help="pre train z value")
-    parser.add_argument("--dt", type=int, default=-1, help="dynamic threshold")
+    parser.add_argument("--dt", type=int, default=-1, help="dynamic adaptive threshold")
     parser.add_argument("--pre", type=int, default=-1, help="pre-train supervised")
-    parser.add_argument("--resume", type=int, default=-1, help="resume")
-    parser.add_argument("--ep0", type=int, default=0, help="first epoch - for resume")
+    parser.add_argument("--resume", type=int, default=0, help="resume")
+    parser.add_argument("--ep0", type=int, default=-1, help="first epoch - for resume")
     #image size, tal, lr ,reg ,up pe ratio
     args = parser.parse_args()
     torch.cuda.set_device(args.local_rank)
@@ -146,8 +147,8 @@ def main():
     torch.backends.cudnn.benchmark =False
 
     if args.local_rank in [-1, 0]:
-        os.makedirs('tensorboard', exist_ok=True)
-        writer = SummaryWriter('tensorboard')
+        os.makedirs('tensorboard/'+args.name, exist_ok=True)
+        writer = SummaryWriter('tensorboard/'+args.name)
 
     # prepare input
     import pickle
@@ -300,9 +301,12 @@ def main():
         scheduler.step()
     # hyperparameters
     #samp_img, samp_lbl=x_u_split_equal(num_series//10,gt_ser,series_list_train, series_dict, image_dict)
-   
-    learning_rate = 0.0002#4
-    batch_size = 8#16#32
+    if args.pre >0:
+        learning_rate = 0.0004#4
+        batch_size = 16#32
+    else:
+        learning_rate = 0.0001#4
+        batch_size = 4#16#32
     image_size = 576
     num_epoch = 10#1
     best_auc=0
@@ -314,7 +318,7 @@ def main():
     if args.local_rank != 0:
         torch.distributed.barrier()
     if args.pos>0:
-         print('loading')
+         print('loading model')
          model = seresnext50()
          model.load_state_dict(torch.load('weights'+args.name+'/' +'epoch{}'.format(epoch),map_location='cpu'))
          in_features = model.net.last_linear.in_features
@@ -331,6 +335,7 @@ def main():
     model=model.to(args.device) or None
      
     labeled_dataset, unlabeled_dataset, test_dataset = get_data(args)
+    
     num_train_steps = int(len(labeled_dataset)/(batch_size*4)*num_epoch)   ##### 4 GPUs
     #print('num train steps:', num_train_steps)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4) #1e-4
@@ -339,11 +344,11 @@ def main():
     
     if args.resume >0:
         print('loading resumed')
-        checkpoint='test10/weightsdef_new/'+'epoch6'
+        checkpoint='test10/weights'+args.name+'/epoch{}'.format(args.ep0)
         model.load_state_dict(torch.load(checkpoint,map_location='cpu'))
-        
-        optimizer.load_state_dict(torch.load(checkpoint))
-        scheduler.load_state_dict(torch.load(checkpoint))
+        #doesn't work...
+        #optimizer.load_state_dict(torch.load(checkpoint))
+        #scheduler.load_state_dict(torch.load(checkpoint))
 
     model=model.to(args.device) or None   
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
@@ -367,7 +372,7 @@ def main():
 
     # if args.local_rank == 0:
     #     torch.distributed.barrier()
-    mu=1
+    mu=args.mu
     num_workers=5
     train_sampler = DistributedSampler#RandomSampler if args.local_rank == -1 else DistributedSampler
 
@@ -412,14 +417,17 @@ def main():
     lambda_u=1##0.5#1
     T=1
     threshold_max=args.max
-    threshold_min=0.05 ##0.02
+    threshold_min=args.min##0.05 ##0.02
     max_prob=0
     name=args.name
     alpha=2*0.2/(len(labeled_dataset)/batch_size)
-    
+    epoch0+=1
     print('weak H strong H AFF RERACR')
     print(threshold_max, threshold_min, name, 'weights_decay 5e-4', learning_rate, batch_size )
     print('start trainnnnn')
+    dist_res= {'loss_train':[],'loss_x':[], 'loss_u':[], 'loss_val':[], 'num_lbl':[], 'num_pos':[]}
+     
+
     for ep in range(epoch0,num_epoch+epoch0):
         losses = AverageMeter()
          
@@ -437,10 +445,11 @@ def main():
         unlabeled_trainloader.sampler.set_epoch(ep)
         ###############################
         fac=1
-        eta=1
+        eta_max=1
+        eta_min=1
         model.train()
         if ep>0:
-            threshold_min=0.05
+            threshold_min=args.min
             lambda_u=1
             if args.pre >0 :
                 batch_size=8
@@ -450,7 +459,7 @@ def main():
             #if i == len(generator)-1:
              #   end = len(generator.dataset)
             #inputs_x = images.to(args.device)
-
+            max_pseudo=0
             labels = labels.float().to(args.device)
              
             if args.pre>0:
@@ -488,9 +497,7 @@ def main():
                 
                 pseudo_label=pe_norm* pseudo_label
             
-            if args.dt>0:
-                threshold_max=eta*threshold_max     
-                
+            
             #print(pseudo_label.shape, pseudo_label.max().item())
             max_prob=(pseudo_label.ge(threshold_max).float())
             max_, targets_u = torch.max(pseudo_label, dim=-1)
@@ -500,11 +507,18 @@ def main():
             num_lbl+=mask.sum().item()
             if max_pseudo< pseudo_label.max().item():
                 max_pseudo=pseudo_label.max().item()
-            per_pe= 0.06 /((num_pe+1)/ (num_lbl+ 1))
-            per_no=0.94/((num_lbl-num_pe+1)/(num_lbl+ 1))
-            pe_norm=per_pe /(per_pe+ per_no)
-            
 
+            fac=fac-alpha
+            if (i%20) & (args.dt>0):
+                               
+                per_pe=  (num_pe/ (num_lbl+ 1))/0.05
+                per_no=((num_lbl-num_pe+1)/(num_lbl+ 1))/0.95
+                pe_norm=per_pe /(per_pe+ per_no)
+                eta_max=fac**(1-per_pe)
+                eta_min=((1-fac)/2)**(per_no-1)
+                threshold_max=eta_max*threshold_max     
+                threshold_min=eta_min*threshold_min 
+                print('thresh', threshold_max, 1-fac, eta_min, per_no,threshold_min)
            # print('probs:',logits_u_w.detach()/args.T)#, max_probs[:20])
             Lu= (F.binary_cross_entropy_with_logits(logits_u_s.view(-1), pseudo_label.view(-1),  reduction='none') * mask).mean()
             #Lu = (nn.BCEWithLogitsLoss(logits_u_s, targets_u.float(),  reduction='none') )#* mask).mean()
@@ -513,18 +527,19 @@ def main():
             #                       reduction='none') * mask).mean()
             loss = Lx + lambda_u * Lu
             if (args.local_rank == 0) & (i%50==0):
-                print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
+                #print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
+                print(f'loss: {losses.avg} loss_x: {losses_x.avg}, loss u:{losses_u.avg} lbls:{num_lbl/len(labeled_dataset)} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
+                
                 if args.dist>0:
                     print("dist ", num_lbl,num_pe, per_pe, per_no, pe_norm)
             #print(i, start, end)
             #feature[start:end] = np.squeeze(features.cpu().data.numpy())
-            fac=fac-alpha
-            eta=fac**(1-pe_norm)
+            
             if args.local_rank in [-1, 0]:         
 
-                    writer.add_scalar('train/1.train_loss', loss.item(), i)
-                    writer.add_scalar('train/2.train_loss_x', Lx.item(), i)
-                    writer.add_scalar('train/3.train_loss_u', Lu.item(), i)
+                    writer.add_scalar('train/1.train_loss', losses.avg, i)
+                    writer.add_scalar('train/2.train_loss_x', losses_x.avg, i)
+                    writer.add_scalar('train/3.train_loss_u', losses_u.avg, i)
                     writer.add_scalar('train/4.pe', num_pe/(num_lbl+1), i)
             # args.writer.add_scalar('test/1.test_acc', test_acc, epoch)
             # args.writer.add_scalar('test/2.test_loss', test_loss, epoch)

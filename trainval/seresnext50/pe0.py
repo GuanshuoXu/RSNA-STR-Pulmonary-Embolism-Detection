@@ -25,7 +25,7 @@ cifar100_mean = (0.5071, 0.4867, 0.4408)
 cifar100_std = (0.2675, 0.2565, 0.2761)
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
-image_size = 576#432
+
 
 seed = 2001
 random.seed(seed)
@@ -80,9 +80,10 @@ class PE_SSL(Dataset):
         if self.three:
             x = np.concatenate([x1, x2, x3], axis=2)
         else:
-            x=x2
+            x=x2#np.expand_dims(x2, axis=0)
         bbox = self.bbox_dict[self.image_dict[self.image_list[index]]['series_id']]
         x = x[bbox[1]:bbox[3],bbox[0]:bbox[2],:]
+        #x = x[bbox[1]+20:bbox[3]-20,bbox[0]+20:bbox[2]-20,:]
         x = cv2.resize(x, (self.target_size,self.target_size))
         ##img = Image.fromarray(x)
         ##if self.transform is not None:
@@ -92,12 +93,24 @@ class PE_SSL(Dataset):
             x = transforms.Normalize(mean=[0.456, 0.456, 0.456], std=[0.224, 0.224, 0.224])(x)
             #print('test')
         elif not self.pil:
+           
             x = self.transform(image=x)['image']
-            x = x.transpose(2, 0, 1)
+            if self.three:
+                x = x.transpose(2, 0, 1)
+            else:
+                x=np.expand_dims(x, axis=0)
+                #print("trans0",x.shape)
+            #print('22222',x.shape)
             #print('labled')
         else:
+            #np.expand_dims(x, axis=2)
             img = Image.fromarray(x)
+             
             x=self.transform(img)
+            #print("trans0",x[0].shape)
+            if not self.three:
+                x=(x[0][1,:,:].unsqueeze(axis=0),x[1][1,:,:].unsqueeze(axis=0))
+            #print("trans1",x[0].shape)
             #print('unlabeld')
         y = self.image_dict[self.image_list[index]]['pe_present_on_image']
         y_true=self.targets[index]
@@ -151,12 +164,23 @@ def get_data(args):
     #     transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
     #base_dataset= PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=image_list_train, target_size=image_size)#, transform=train_transform)
     #kaggle
-    transform_labeled = albumentations.Compose([
+    image_size = args.size
+    if args.three<=0:
+        transform_labeled = albumentations.Compose([
+        albumentations.RandomContrast(limit=0.2, p=1.0),
+        albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
+        albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
+        albumentations.Normalize(mean=0.456, std=0.224, max_pixel_value=255.0, p=1.0)
+        ])
+    else:
+        transform_labeled = albumentations.Compose([
         albumentations.RandomContrast(limit=0.2, p=1.0),
         albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
         albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
         albumentations.Normalize(mean=(0.456, 0.456, 0.456), std=(0.224, 0.224, 0.224), max_pixel_value=255.0, p=1.0)
-    ])
+        ])
+
+    
     ############
     gt_z=[]
     gt_position=[]
@@ -185,6 +209,15 @@ def get_data(args):
         
         return  series_list_train, ser_idx, np.array(image_list_train)
     ser_list_train, ser_idx, train_images=reduce_data(data_ratio, series_list_train)
+    
+    #type='pe'
+    # targets_20, train_labeled_img20, targets_ser=get_labels(ser_list_train, series_dict, image_dict, type)
+    # np.save('images_20',train_labeled_img20 )
+    # np.save('targets_20',targets_20 )
+    # targets_20, train_labeled_img20, targets_ser=get_labels(ser_list_train, series_dict, image_dict, type)
+    # np.save('images_val10',image_list_valid[:10000])
+    # np.save('targets_val10',targets_v )
+    
     data_ratio=0.1
     if data_ratio<1:
         s_list_train, s_idx,_=reduce_data(data_ratio, ser_list_train)
@@ -206,7 +239,7 @@ def get_data(args):
     
     #num_labeled = len(ser_list_train) // 10
     if args.pos>0:
-        three=True#False
+        three=(args.three>0)#True#False
         type='pos'
 
     elif args.z>0:
@@ -214,7 +247,7 @@ def get_data(args):
         type='pos'
     else:
         type='pe'
-        three=True
+        three=True#(args.three>0)#True
     win=(args.win>0)
     
     
@@ -229,20 +262,22 @@ def get_data(args):
         #targets_labeled=targets
         train_unlabeled_dataset=None
     else:
-        if args.resume>0:
+        if args.resume>=0:
+             print('loading data')
              train_labeled_img=np.load('images_02.npy')
              targets_labeled=np.load('targets_02.npy')
         else:
             targets_labeled, train_labeled_img, targets_ser=get_labels(s_list_train, series_dict, image_dict, type)
             print('ttt', len(targets_labeled), len(train_labeled_img), len(train_images))
-            np.save("images_02", train_labeled_img)
-            np.save('targets_02', targets_labeled)
+            #np.save("images_02", train_labeled_img)
+            #np.save('targets_02', targets_labeled)
+        
         #dummy targets for unlabeld
         targets=np.arange(len(train_images))#np.array(targets_labeled)
         train_unlabeled_idxs = x_u_split(s_idx, ser_list_train)# np.arange(len(ser_list_train)) #12:17
         targets, unlbl_img, _= get_labels(ser_list_train[train_unlabeled_idxs], series_dict, image_dict)
         print(unlbl_img.shape[0])
-        train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)
+        train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)#, three=three)
      #### cifar mean
     if args.up> 0.05:
         train_labeled_img, targets_labeled= x_u_split_equal(args.up, np.array(targets_labeled), train_labeled_img)#, series_dict, image_dict)#targets_ser,s_list_train,
@@ -252,9 +287,19 @@ def get_data(args):
     print('bbbb unnnn')
     
     val_targets, val_images,_=get_labels(series_list_valid[0:300], series_dict, image_dict, type)
-    print('pe num test', sum(val_targets[:20000]))
-    test_dataset=PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=val_images[:20000], target_size=image_size, targets=val_targets[:20000],three=three,win=win)#,transform=transform_val)
-    return train_labeled_dataset, train_unlabeled_dataset, test_dataset
+    print('pe num test', sum(val_targets[:10000]))
+    test_dataset=PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=val_images[:10000], target_size=image_size, targets=val_targets[:20000],three=three,win=win)#,transform=transform_val)
+    ##### validation set (not test)
+    idx_val=np.random.choice(1000, size=500, replace=False)
+    pool=np.array(image_list_valid[10000:11000])
+    val_pool=pool[idx_val]
+    y_val=[]
+    for i in range(val_pool.shape[0]):
+        y_val.append(image_dict[val_pool[i]]['pe_present_on_image'])
+    print('validation: ', sum(y_val)/val_pool.shape[0])
+    val_set = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=val_pool, target_size=image_size, targets=y_val, transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True)
+        
+    return train_labeled_dataset, train_unlabeled_dataset, val_set
 
 def get_labels(series_list, series_dict, image_dict, type='pe'):
     gt_list=[]
@@ -428,17 +473,20 @@ class CIFAR10SSL(datasets.CIFAR10):
 
         
 class TransformFixMatch(object):
-    def __init__(self, mean, std):
+    def __init__(self, mean, std, image_size=576):
         self.weak = transforms.Compose([
-            transforms.RandomHorizontalFlip()])
+            #transforms.RandomVerticalFlip(), # new
+            transforms.RandomHorizontalFlip()])# 87
             # transforms.RandomCrop(size=576,
             #                       padding=int(576*0.125),
             #                       padding_mode='reflect')])
-            #transforms.RandomAffine(20, translate=(0.2,0.2))])
+            #transforms.RandomAffine(10, translate=(0.1,0.1))]) ## new
         self.strong = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
+            transforms.RandomHorizontalFlip(), #87
+           # transforms.RandomVerticalFlip(), ## new
             transforms.RandomAffine(20, translate=(0.2,0.2)),
             transforms.RandomResizedCrop(size=image_size),
+            #transforms.RandomVerticalFlip(), ### new
             #transforms.CenterCrop(size=image_size*0.75),
            # transforms.Resize((image_size, image_size)),
             # transforms.RandomCrop(size=image_size,

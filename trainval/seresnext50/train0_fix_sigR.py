@@ -98,7 +98,7 @@ def pre_train(args):
     #samp_img, samp_lbl=x_u_split_equal(num_series//10,gt_ser,series_list_train, series_dict, image_dict)
     labeled_dataset, unlabeled_dataset, test_dataset = get_data(args)
     
-    learning_rate = 0.0002 #4
+    learning_rate = 0.0004 #4
     batch_size = 16#32
     image_size = 576
     num_epoch = 1#1
@@ -125,9 +125,11 @@ def pre_train(args):
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     print('cre')
-     
-    criterion=nn.MSELoss().to(args.device)
 
+    if args.pos>0: 
+        criterion=nn.MSELoss().to(args.device)
+    else:
+        criterion=nn.BCEWithLogitsLoss().to(args.device)
     # training
     train_transform = albumentations.Compose([
         albumentations.RandomContrast(limit=0.2, p=1.0),
@@ -170,8 +172,9 @@ def pre_train(args):
     # #print(len(generator), len(datagen))
     print('iterator for validation')
     ######
-    # image_list_valid=image_list_valid[:20000]
-    # datagenV = PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=image_list_valid, target_size=image_size)
+    if args.pos<0:
+        image_list_valid=image_list_valid[:10000]
+        test_dataset= PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=image_list_valid, target_size=image_size)
     generatorV = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
     
     #######
@@ -249,34 +252,33 @@ def pre_train(args):
                 loss = criterion(logits.view(-1),labels)
                 #print('11123333', logits.view(-1),labels)
                 losses.update(loss.item(), images.size(0))
-        #         pred_prob[start:end] = np.squeeze(logits.sigmoid().cpu().data.numpy())
-        #         lbl_num=labels.cpu().detach().numpy().reshape(-1)
-        #         if lbl_num.sum()>0.0:
-        #             #print(lbl_num)
-        #             pos+=lbl_num.sum()
-        #             idx=np.where(lbl_num>0)
-        #             #print(lbl_num.sum(), pred_prob[idx].mean())
-
-        #         y_true.append(lbl_num)
+                
+                if args.pos<0:        
+                    pred_prob[start:end] = np.squeeze(logits.sigmoid().cpu().data.numpy())
+                    lbl_num=labels.cpu().detach().numpy().reshape(-1)
+                    y_true.append(lbl_num)
         #         #feature_val[start:end] = np.squeeze(features.cpu().data.numpy())
-        # y_true=np.concatenate(y_true)
+       
         #label = np.zeros((len(image_list_valid),),dtype=float)        
         # for i in range(len(image_list_valid)):
         #     label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
         # print('pos:', label.sum()/20000, pos)
-        #auc = roc_auc_score(y_true, pred_prob)
+        if args.pos<0:
+            y_true=np.concatenate(y_true)
+            auc = roc_auc_score(y_true, pred_prob)
+            print("auc: ", auc)
         #if args.local_rank == 0:
         print("checkpoint {} ...".format(ep))
-        mse_ep=losses.avg
-        print('loss:{}'.format(mse_ep), flush=True)
+        loss_ep=losses.avg
+        print('loss:{}'.format(loss_ep), flush=True)
         print()
 
         if args.local_rank == 0:
             out_dir = 'weights'+name+'/'
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
-            if mse_ep<best_mse:
-                best_mse=mse_ep
+            if loss_ep<best_mse:
+                best_mse=loss_ep
                 print('saving')
                 torch.save(model.module.state_dict(), out_dir+'epoch{}'.format(ep))
                 out_dir = 'features0'+name+'/'

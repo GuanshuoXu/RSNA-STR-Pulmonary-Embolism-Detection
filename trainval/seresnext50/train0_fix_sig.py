@@ -23,10 +23,10 @@ import pydicom
 import copy
 #from fix_match.FixMatch.dataset.pe import get_data
 from train0_fix_sigR import pre_train
-from pe0 import get_data
+from pe0 import get_data, PE_SSL
 from transformers import get_linear_schedule_with_warmup
 from torch.utils.tensorboard import SummaryWriter
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import precision_score, recall_score,roc_auc_score
 
 
 class AverageMeter(object):
@@ -124,11 +124,13 @@ def main():
     parser.add_argument("--name", type=str, default="fix9", help="name for identification")
     parser.add_argument("--up", type=float, default=0.05, help="upsample ratio")
     parser.add_argument("--win", type=int, default=-1, help="different windows")
+    parser.add_argument("--three", type=int, default=1, help="3 slices per x")
     parser.add_argument("--pos", type=int, default=-1, help="pre train position")
     parser.add_argument("--z", type=int, default=-1, help="pre train z value")
     parser.add_argument("--dt", type=int, default=-1, help="dynamic adaptive threshold")
     parser.add_argument("--pre", type=int, default=-1, help="pre-train supervised")
     parser.add_argument("--resume", type=int, default=0, help="resume")
+    parser.add_argument("--size", type=int, default=576, help="image size")
     parser.add_argument("--ep0", type=int, default=-1, help="first epoch - for resume")
     #image size, tal, lr ,reg ,up pe ratio
     args = parser.parse_args()
@@ -171,6 +173,8 @@ def main():
     with open('../lung_localization/split2/bbox_dict_valid.pickle', 'rb') as f:
         bbox_dict_valid = pickle.load(f)
     print(len(image_list_valid), len(image_dict), len(bbox_dict_valid), len(series_list_train))
+
+
 
     # data_ratio=0.02
     # count_pos=0
@@ -299,30 +303,99 @@ def main():
             scaled_loss.backward()
         optimizer.step()
         scheduler.step()
+
+    # not in use for now
+    def prepare4train(learning_rate, batch_size):
+        num_train_steps = int(len(labeled_dataset)/(batch_size*4)*num_epoch)   ##### 4 GPUs
+        #print('num train steps:', num_train_steps)
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4) #1e-4
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_train_steps)
+        print('opt')
+        model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
+        labeled_trainloader = DataLoader(
+            labeled_dataset,
+            sampler=train_sampler(labeled_dataset),
+            batch_size=batch_size,
+            num_workers=num_workers,
+            drop_last=True)
+
+        unlabeled_trainloader = DataLoader(
+            unlabeled_dataset,
+            sampler=train_sampler(unlabeled_dataset),
+            batch_size=batch_size*mu,
+            num_workers=num_workers,
+            drop_last=True)
+
+    def validate(val_size):
+        #num_pe=0
+        #num_no=0
+        num_lbl=0
+        #pos_count=0
+        lbl_count=0
+        #detected=0
+        #max_count=0
+        #min_count=0
+        gt= np.zeros(val_size)
+        preds=np.zeros(val_size)
+        for (x_u_w, x_u_s), val_labels in val_loader:
+                #input= torch.cat(( x_u_w, x_u_s)).to(args.device)
+            # #print('3')
+            #inputs=torch.cat((inputs_x, inputs_u_w, inputs_u_s))
+            #targets_x = targets_x.to(args.device)
+                #print('iiiii', input.shape, batch_size)
+                #pos_count+=val_labels.sum().item()
+                #lbl_count+=val_labels.shape[0]
+                features,logits = model(x_u_w.to(args.device))#input)
+                val_labels=val_labels.unsqueeze(axis=1)#.to(args.device)
+                pseudo_label = torch.sigmoid(logits.detach().cpu())
+                #pos_mask=val_labels[val_labels==1]
+                #print('ppp', pseudo_label)
+                #detected+=pseudo_label[pos_mask].ge(threshold_max).sum().item()
+                max_mask=(pseudo_label.ge(threshold_max))
+                #print('rrr',max_mask)# val_labels.shape)
+                #max_, pos_lbl = torch.max(pseudo_label, dim=-1)
+                #min_probs, neg_lbl= torch.min(pseudo_label, dim=-1)
+                min_mask =(pseudo_label.lt(threshold_min))
+                num_lbl=max_mask.sum().item() + min_mask.sum().item()
+                gt[lbl_count:lbl_count+num_lbl] = val_labels[min_mask+max_mask].detach().numpy()
+                preds[lbl_count:lbl_count+num_lbl] = pseudo_label[min_mask+max_mask].detach().numpy()
+                preds[lbl_count:lbl_count+num_lbl] = (preds[lbl_count:lbl_count+num_lbl] >= threshold_max)
+                #pe=val_labels[max_mask].sum().item()#(pseudo_label[max_mask] == val_labels[max_mask])
+                #no=(val_labels[min_mask]==0.0).sum().item()#(pseudo_label[min_mask] == val_labels[min_mask])
+                #num_pe+=pe#.sum().item()
+                #num_no+=no#.sum().item()
+                #max_count+=max_mask.sum().item()
+                #min_count+=min_mask.sum().item()
+                lbl_count+=num_lbl#num_pe+num_no)
+               # print(threshold_min, pseudo_label)
+        #print(f"recall pe: {detected/pos_count} acc pe {num_pe/(max_count+1)} acc_no: {num_no/(min_count+1)}  labels: {(max_count+min_count)/lbl_count}")
+        print(f"recall pe: {recall_score(gt[:lbl_count], preds[:lbl_count])} acc pe {precision_score(gt[:lbl_count], preds[:lbl_count])} labels: {lbl_count/val_size}")
     # hyperparameters
     #samp_img, samp_lbl=x_u_split_equal(num_series//10,gt_ser,series_list_train, series_dict, image_dict)
-    if args.pre >0:
+    image_size = args.size#432#576
+    if (args.pre >0) or (args.three<=0) or (image_size < 576):
         learning_rate = 0.0004#4
-        batch_size = 16#32
+        batch_size = 16
     else:
-        learning_rate = 0.0001#4
-        batch_size = 4#16#32
-    image_size = 576
+        learning_rate = 0.0002#4
+        batch_size = 8#32
+    
     num_epoch = 10#1
     best_auc=0
     # build model
-    if args.pos>0:
+    if (args.pos>0) or (args.pre>0):
        model2, epoch=pre_train(args)
     epoch0=args.ep0#0
 
     if args.local_rank != 0:
         torch.distributed.barrier()
-    if args.pos>0:
-         print('loading model')
-         model = seresnext50()
-         model.load_state_dict(torch.load('weights'+args.name+'/' +'epoch{}'.format(epoch),map_location='cpu'))
-         in_features = model.net.last_linear.in_features
-         model.last_linear = nn.Linear(in_features, 1)
+    if (args.pos>0) or (args.pre>0):
+        print('loading model')
+        model = seresnext50()
+        model.load_state_dict(torch.load('weights'+args.name+'/' +'epoch{}'.format(epoch),map_location='cpu'))
+        if (args.pos>0):
+            in_features = model.net.last_linear.in_features
+            model.last_linear = nn.Linear(in_features, 1)
     else:
         model = seresnext50()
     if args.local_rank == 0:
@@ -334,8 +407,9 @@ def main():
     print('af res')
     model=model.to(args.device) or None
      
-    labeled_dataset, unlabeled_dataset, test_dataset = get_data(args)
+    labeled_dataset, unlabeled_dataset, val_set = get_data(args)
     
+    #1111
     num_train_steps = int(len(labeled_dataset)/(batch_size*4)*num_epoch)   ##### 4 GPUs
     #print('num train steps:', num_train_steps)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4) #1e-4
@@ -355,17 +429,18 @@ def main():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     print('cre')
     if args.fl >0:
-        criterion = WeightedFocalLoss(alpha=0.33, gamma=1).to(args.device)#
+        criterion = WeightedFocalLoss(alpha=0.25, gamma=1).to(args.device)#
+        print("alpha 0.25 gamma 1")
     else:
         criterion=nn.BCEWithLogitsLoss().to(args.device)
 
-    # training
-    train_transform = albumentations.Compose([
-        albumentations.RandomContrast(limit=0.2, p=1.0),
-        albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
-        albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
-        albumentations.Normalize(mean=(0.456, 0.456, 0.456), std=(0.224, 0.224, 0.224), max_pixel_value=255.0, p=1.0)
-    ])
+    # # training
+    # train_transform = albumentations.Compose([
+    #     albumentations.RandomContrast(limit=0.2, p=1.0),
+    #     albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
+    #     albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
+    #     albumentations.Normalize(mean=(0.456, 0.456, 0.456), std=(0.224, 0.224, 0.224), max_pixel_value=255.0, p=1.0)
+    # ])
     ####
 
     #DATASET_GETTERS[args.dataset]( args, './data')
@@ -404,26 +479,35 @@ def main():
     # sampler = DistributedSampler(datagen)
     # generator = DataLoader(dataset=datagen,  batch_size=batch_size, sampler=sampler,num_workers=5, pin_memory=True)#, drop_last=True) #
     # #print(len(generator), len(datagen))
+    
+    
+    val_loader = DataLoader(dataset=val_set, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
+    #######
+    
+    
     print('iterator for validation')
     ######
     image_list_valid=image_list_valid[:10000]
     datagenV = PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=image_list_valid, target_size=image_size)
     generatorV = DataLoader(dataset=datagenV, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
     
-    #######
+
+    
     #feature = np.zeros((len(image_list_train), 2048),dtype=np.float32)
     feature_val = np.zeros((len(image_list_valid), 2048),dtype=np.float32)
     pred_prob = np.zeros((len(image_list_valid),),dtype=np.float32)
     lambda_u=1##0.5#1
     T=1
-    threshold_max=args.max
-    threshold_min=args.min##0.05 ##0.02
+    threshold_max_base=args.max
+    threshold_min_base=args.min##0.05 ##0.02
+    threshold_max= threshold_max_base
+    threshold_min=threshold_min_base
     max_prob=0
     name=args.name
     alpha=2*0.2/(len(labeled_dataset)/batch_size)
     epoch0+=1
     print('weak H strong H AFF RERACR')
-    print(threshold_max, threshold_min, name, 'weights_decay 5e-4', learning_rate, batch_size )
+    print(threshold_max_base, threshold_min_base, name, 'weights_decay 5e-4', learning_rate, batch_size )
     print('start trainnnnn')
     dist_res= {'loss_train':[],'loss_x':[], 'loss_u':[], 'loss_val':[], 'num_lbl':[], 'num_pos':[]}
      
@@ -509,27 +593,32 @@ def main():
                 max_pseudo=pseudo_label.max().item()
 
             fac=fac-alpha
-            if (i%20) & (args.dt>0):
+            if (i%20==0) & (args.dt>0):
                                
                 per_pe=  (num_pe/ (num_lbl+ 1))/0.05
                 per_no=((num_lbl-num_pe+1)/(num_lbl+ 1))/0.95
                 pe_norm=per_pe /(per_pe+ per_no)
                 eta_max=fac**(1-per_pe)
-                eta_min=((1-fac)/2)**(per_no-1)
-                threshold_max=eta_max*threshold_max     
-                threshold_min=eta_min*threshold_min 
-                print('thresh', threshold_max, 1-fac, eta_min, per_no,threshold_min)
+                eta_min=(fac/2)**(per_no-1)
+                threshold_max=eta_max*threshold_max_base     
+                threshold_min=eta_min*threshold_min_base 
+                
            # print('probs:',logits_u_w.detach()/args.T)#, max_probs[:20])
             Lu= (F.binary_cross_entropy_with_logits(logits_u_s.view(-1), pseudo_label.view(-1),  reduction='none') * mask).mean()
+            #Lu= (np.abs(pseudo_labels.view(-1)-)*F.binary_cross_entropy_with_logits(logits_u_s.view(-1), pseudo_label.view(-1),  reduction='none') * mask).mean()
             #Lu = (nn.BCEWithLogitsLoss(logits_u_s, targets_u.float(),  reduction='none') )#* mask).mean()
             #print(Lu.shape, mask.shape)
             # Lu = (F.cross_entropy(logits_u_s, targets_u,
             #                       reduction='none') * mask).mean()
             loss = Lx + lambda_u * Lu
+            losses.update(loss.item(), inputs.size(0))
+            losses_x.update(Lx.item())
+            losses_u.update(Lu.item())
             if (args.local_rank == 0) & (i%50==0):
                 #print(f'loss: {loss.item()} loss_x: {Lx.item()}, loss u:{Lu.item()} lbls:{num_lbl} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
-                print(f'loss: {losses.avg} loss_x: {losses_x.avg}, loss u:{losses_u.avg} lbls:{num_lbl/len(labeled_dataset)} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
-                
+                print(f'loss: {losses.avg} loss_x: {losses_x.avg}, loss u:{losses_u.avg} lbls:{num_lbl/len(unlabeled_dataset)} pos {num_pe/(num_lbl+1)} max {max_pseudo}  fac {fac} above {pseudo_label[max_prob.bool()].mean().item()}')
+                if args.dt>0:
+                    print('thresh', threshold_max, 1-fac, eta_min, per_no,threshold_min)
                 if args.dist>0:
                     print("dist ", num_lbl,num_pe, per_pe, per_no, pe_norm)
             #print(i, start, end)
@@ -541,11 +630,10 @@ def main():
                     writer.add_scalar('train/2.train_loss_x', losses_x.avg, i)
                     writer.add_scalar('train/3.train_loss_u', losses_u.avg, i)
                     writer.add_scalar('train/4.pe', num_pe/(num_lbl+1), i)
+                    writer.add_scalar('train/5.lbl', num_lbl/len(unlabeled_dataset),i)
             # args.writer.add_scalar('test/1.test_acc', test_acc, epoch)
             # args.writer.add_scalar('test/2.test_loss', test_loss, epoch)
-            losses.update(loss.item(), inputs.size(0))
-            losses_x.update(Lx.item())
-            losses_u.update(Lu.item())
+           
             optimizer.zero_grad()
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -554,12 +642,19 @@ def main():
 
        # if args.local_rank == 0:
         print('epoch: {}, train_loss: {} Lx: {} Lu: {} '.format(ep,losses.avg,losses_x.avg,losses_u.avg), flush=True)
+        if args.local_rank in [-1, 0]:         
+
+                    writer.add_scalar('train_ep/1.train_loss', losses.avg, ep)
+                    writer.add_scalar('train_ep/2.train_loss_x', losses_x.avg, ep)
+                    writer.add_scalar('train_ep/3.train_loss_u', losses_u.avg, ep)
+                    writer.add_scalar('train_ep/4.pe', num_pe/(num_lbl+1), ep)
+                    writer.add_scalar('train_ep/5.lbl', num_lbl/len(unlabeled_dataset),ep)
 #validaion phase
         model.eval()
-
+        validate(len(val_set))
         pos=0
         y_true=[]
-        losses = AverageMeter()
+        losses_val = AverageMeter()
         for i, (images, labels) in tqdm(enumerate(generatorV)):
             with torch.no_grad():
                 start = i*batch_size
@@ -571,29 +666,30 @@ def main():
 
                 features, logits = model(images)
                 loss = criterion(logits.view(-1),labels)
-                losses.update(loss.item(), images.size(0))
+                losses_val.update(loss.item(), images.size(0))
                 pred_prob[start:end] = np.squeeze(logits.sigmoid().cpu().data.numpy())
                 lbl_num=labels.cpu().detach().numpy().reshape(-1)
-                if lbl_num.sum()>0.0:
-                    #print(lbl_num)
-                    pos+=lbl_num.sum()
-                    idx=np.where(lbl_num>0)
-                    #print(lbl_num.sum(), pred_prob[idx].mean())
+                # if lbl_num.sum()>0.0:
+                #     #print(lbl_num)
+                #     pos+=lbl_num.sum()
+                #     idx=np.where(lbl_num>0)
+                #     #print(lbl_num.sum(), pred_prob[idx].mean())
 
                 y_true.append(lbl_num)
                 #feature_val[start:end] = np.squeeze(features.cpu().data.numpy())
         y_true=np.concatenate(y_true)
-        label = np.zeros((len(image_list_valid),),dtype=int)        
-        for i in range(len(image_list_valid)):
-            label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
-        print('pos:', label.sum()/label.shape[0], pos)
+        # label = np.zeros((len(image_list_valid),),dtype=int)        
+        # for i in range(len(image_list_valid)):
+        #     label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
+        # print('pos:', label.sum()/label.shape[0], pos)
         auc = roc_auc_score(y_true, pred_prob)
         #if args.local_rank == 0:
         print("checkpoint {} ...".format(ep))
-        print('loss:{}, auc:{}'.format(losses.avg, auc), flush=True)
+        print('loss:{}, auc:{}'.format(losses_val.avg, auc), flush=True)
         print()
 
         if args.local_rank == 0:
+            writer.add_scalar('val_ep/1.val_loss', losses_val.avg, ep)
             out_dir = 'test10/weights'+name+'/'
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)

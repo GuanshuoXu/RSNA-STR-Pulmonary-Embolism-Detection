@@ -165,20 +165,20 @@ def get_data(args):
     #base_dataset= PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=image_list_train, target_size=image_size)#, transform=train_transform)
     #kaggle
     image_size = args.size
-    if args.three<=0:
-        transform_labeled = albumentations.Compose([
-        albumentations.RandomContrast(limit=0.2, p=1.0),
-        albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
-        albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
-        albumentations.Normalize(mean=0.456, std=0.224, max_pixel_value=255.0, p=1.0)
-        ])
-    else:
-        transform_labeled = albumentations.Compose([
-        albumentations.RandomContrast(limit=0.2, p=1.0),
-        albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
-        albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
-        albumentations.Normalize(mean=(0.456, 0.456, 0.456), std=(0.224, 0.224, 0.224), max_pixel_value=255.0, p=1.0)
-        ])
+    # if args.three<=0:
+    #     transform_labeled = albumentations.Compose([
+    #     albumentations.RandomContrast(limit=0.2, p=1.0),
+    #     albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
+    #     albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
+    #     albumentations.Normalize(mean=0.456, std=0.224, max_pixel_value=255.0, p=1.0)
+    #     ])
+    # else:
+    transform_labeled = albumentations.Compose([
+    #albumentations.Flip(d=1),
+    albumentations.RandomContrast(limit=0.2, p=1.0),
+    albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
+    albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
+    albumentations.Normalize(mean=(0.456, 0.456, 0.456), std=(0.224, 0.224, 0.224), max_pixel_value=255.0, p=1.0)])
 
     
     ############
@@ -277,7 +277,7 @@ def get_data(args):
         train_unlabeled_idxs = x_u_split(s_idx, ser_list_train)# np.arange(len(ser_list_train)) #12:17
         targets, unlbl_img, _= get_labels(ser_list_train[train_unlabeled_idxs], series_dict, image_dict)
         print(unlbl_img.shape[0])
-        train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True,win=win)#, three=three)
+        train_unlabeled_dataset = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_train, image_list=unlbl_img, target_size=image_size, targets=targets,transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std,image_size=args.size), pil=True,win=win)#, three=three)
      #### cifar mean
     if args.up> 0.05:
         train_labeled_img, targets_labeled= x_u_split_equal(args.up, np.array(targets_labeled), train_labeled_img)#, series_dict, image_dict)#targets_ser,s_list_train,
@@ -290,14 +290,16 @@ def get_data(args):
     print('pe num test', sum(val_targets[:10000]))
     test_dataset=PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=val_images[:10000], target_size=image_size, targets=val_targets[:20000],three=three,win=win)#,transform=transform_val)
     ##### validation set (not test)
-    idx_val=np.random.choice(1000, size=500, replace=False)
-    pool=np.array(image_list_valid[10000:11000])
-    val_pool=pool[idx_val]
+    #st=np.random.get_state()
+    #idx_val=np.random.choice(1000, size=500, replace=False) ###np.arange(700)#
+    #np.random.set_state(st)
+    val_pool=np.array(image_list_valid[10000:11000])
+    #val_pool=pool[idx_val]
     y_val=[]
     for i in range(val_pool.shape[0]):
         y_val.append(image_dict[val_pool[i]]['pe_present_on_image'])
     print('validation: ', sum(y_val)/val_pool.shape[0])
-    val_set = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=val_pool, target_size=image_size, targets=y_val, transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std), pil=True)
+    val_set = PE_SSL(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=val_pool, target_size=image_size, targets=y_val, transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std,image_size=args.size), pil=True)
         
     return train_labeled_dataset, train_unlabeled_dataset, val_set
 
@@ -475,14 +477,14 @@ class CIFAR10SSL(datasets.CIFAR10):
 class TransformFixMatch(object):
     def __init__(self, mean, std, image_size=576):
         self.weak = transforms.Compose([
-            #transforms.RandomVerticalFlip(), # new
-            transforms.RandomHorizontalFlip()])# 87
+            #transforms.RandomVerticalFlip(), # new 
+            transforms.RandomHorizontalFlip()])# 87 horizontal
             # transforms.RandomCrop(size=576,
             #                       padding=int(576*0.125),
             #                       padding_mode='reflect')])
             #transforms.RandomAffine(10, translate=(0.1,0.1))]) ## new
         self.strong = transforms.Compose([
-            transforms.RandomHorizontalFlip(), #87
+            transforms.RandomHorizontalFlip(), #87= horizontak
            # transforms.RandomVerticalFlip(), ## new
             transforms.RandomAffine(20, translate=(0.2,0.2)),
             transforms.RandomResizedCrop(size=image_size),

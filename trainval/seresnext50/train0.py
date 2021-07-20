@@ -112,7 +112,9 @@ def main():
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark =False
 
     # prepare input
     import pickle
@@ -155,7 +157,7 @@ def main():
     
     image_list_train=list(np.load('images_02.npy'))
     targets=np.load('targets_02.npy')
-    print('reduced data: ',data_ratio, len(image_list_train), 'pos ratio: ', targets.sum()/len(image_list_train))
+    print('reduced data: ',data_ratio, len(image_list_train), 'pos ratio: ',  targets.sum()/len(image_list_train)) #sum(gt_img)
     def x_u_split_equal(num_labeled, labels_ser, series_list, series_dict, image_dict):
         total=0
         num_classes=2 ###########
@@ -226,10 +228,10 @@ def main():
         return labeled_img_arr, gt_labeled
     # hyperparameters
     #image_list_train, samp_lbl=x_u_split_equal(num_series,gt_ser,series_list_train, series_dict, image_dict)
-    learning_rate = 0.0002#4
+    learning_rate = 0.0004
     batch_size = 16
     image_size = 576
-    num_epoch = 7#1
+    num_epoch = 10#1
     best_auc=0
     # build model
     if args.local_rank != 0:
@@ -245,7 +247,7 @@ def main():
 
     num_train_steps = int(len(image_list_train)/(batch_size*4)*num_epoch)   ##### 4 GPUs
     print('num train steps:', num_train_steps)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-4)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_train_steps)
     print('opt')
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
@@ -268,14 +270,14 @@ def main():
     #print(len(generator), len(datagen))
     print('iterator for validation')
     ######
-    image_list_valid=image_list_valid[:20000]
+    image_list_valid=image_list_valid[:10000]
     datagenV = PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=image_list_valid, target_size=image_size)
     generatorV = DataLoader(dataset=datagenV, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
     feature = np.zeros((len(image_list_train), 2048),dtype=np.float32)
     feature_val = np.zeros((len(image_list_valid), 2048),dtype=np.float32)
     pred_prob = np.zeros((len(image_list_valid),),dtype=np.float32)
 
-    print('start trainnnnn')
+    print('start trainnnnn ', learning_rate, batch_size, '5e-4')#=1e-4')
     for ep in range(0,num_epoch):
         losses = AverageMeter()
         sampler.set_epoch(ep)
@@ -331,15 +333,15 @@ def main():
                 #    # print(lbl_num.sum(), pred_prob[idx].mean())
                
                 y_true.append(lbl_num)
-                if (count >= 10000) & (auc==0):
-                    y_10=np.concatenate(y_true)
-                    print('cnt10', count ,'pe', y_10.sum()/y_10.shape[0])
-                #feature_val[start:end] = np.squeeze(features.cpu().data.numpy())
-                    auc = roc_auc_score(y_10, pred_prob[:count])
+                # if (count >= 10000) & (auc==0):
+                #     y_10=np.concatenate(y_true)
+                #     print('cnt10', count ,'pe', y_10.sum()/y_10.shape[0])
+                # #feature_val[start:end] = np.squeeze(features.cpu().data.numpy())
+                #     auc = roc_auc_score(y_10, pred_prob[:count])
         
-                    print('loss:{}, auc:{}'.format(losses.avg, auc), flush=True)
+                #     print('loss:{}, auc:{}'.format(losses.avg, auc), flush=True)
         y_true=np.concatenate(y_true)
-        label = np.zeros((len(image_list_valid),),dtype=int)        
+        #label = np.zeros((len(image_list_valid),),dtype=int)        
         # for i in range(len(image_list_valid)):
         #     label[i] = image_dict[image_list_valid[i]]['pe_present_on_image']
         # print('pos:', label.sum()/20000, pos)

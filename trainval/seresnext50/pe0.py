@@ -174,7 +174,7 @@ def get_data(args):
     #     ])
     # else:
     transform_labeled = albumentations.Compose([
-    #albumentations.Flip(d=1),
+    #albumentations.HorizontalFlip(),
     albumentations.RandomContrast(limit=0.2, p=1.0),
     albumentations.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.2, rotate_limit=20, border_mode=cv2.BORDER_CONSTANT, p=1.0),
     albumentations.Cutout(num_holes=2, max_h_size=int(0.4*image_size), max_w_size=int(0.4*image_size), fill_value=0, always_apply=True, p=1.0),
@@ -185,7 +185,9 @@ def get_data(args):
     gt_z=[]
     gt_position=[]
     gt_ser=[]
-    data_ratio=0.2
+    data_ratio=args.ratio#0.2
+    
+        
     count_pos=0
 
     def reduce_data(data_ratio, series_list):
@@ -262,7 +264,7 @@ def get_data(args):
         #targets_labeled=targets
         train_unlabeled_dataset=None
     else:
-        if args.resume>=0:
+        if args.resume>=0: #2 0
              print('loading data')
              train_labeled_img=np.load('images_02.npy')
              targets_labeled=np.load('targets_02.npy')

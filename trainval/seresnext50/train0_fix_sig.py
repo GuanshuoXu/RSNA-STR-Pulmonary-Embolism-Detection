@@ -26,7 +26,7 @@ from train0_fix_sigR import pre_train
 from pe0 import get_data#, PE_SSL
 from transformers import get_linear_schedule_with_warmup
 from torch.utils.tensorboard import SummaryWriter
-from sklearn.metrics import precision_score, recall_score,roc_auc_score
+from sklearn.metrics import precision_score, recall_score,roc_auc_score, accuracy_score
 
 
 class AverageMeter(object):
@@ -112,6 +112,35 @@ def de_interleave(x, size):
     s = list(x.shape)
     return x.reshape([size, -1] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
 
+# RANDOM_STATE_FILE = 'np_random.pickle'
+# RANDOM_STATE_FILE2 = 'random.pickle'
+
+# def save_random_state():
+#     with open(RANDOM_STATE_FILE, 'wb') as f:
+#         pickle.dump(np.random.get_state(), f)
+#     with open(RANDOM_STATE_FILE2, 'wb') as f2:
+#         pickle.dump(random.getstate(), f2)
+
+# def load_random_state():
+#     with open(RANDOM_STATE_FILE, 'rb') as f:
+#         np.random.set_state(pickle.load(f))
+#     with open(RANDOM_STATE_FILE2, 'rb') as f2:
+#         random.setstate(pickle.load(f2))
+        
+# def optimizer_to(optim, device):
+#     for param in optim.state.values():
+#         # Not sure there are any global tensors in the state dict
+#         if isinstance(param, torch.Tensor):
+#             param.data = param.data.to(device)
+#             if param._grad is not None:
+#                 param._grad.data = param._grad.data.to(device)
+#         elif isinstance(param, dict):
+#             for subparam in param.values():
+#                 if isinstance(subparam, torch.Tensor):
+#                     subparam.data = subparam.data.to(device)
+#                     if subparam._grad is not None:
+#                         subparam._grad.data = subparam._grad.data.to(device)
+#     return optim
 
 def main():
     parser = argparse.ArgumentParser()
@@ -133,7 +162,9 @@ def main():
     parser.add_argument("--size", type=int, default=576, help="image size")
     parser.add_argument("--ep0", type=int, default=-1, help="first epoch - for resume")
     parser.add_argument("--opt", type=int, default=-1, help="change optimizer - adamW")
+    #parser.add_argument("--mask", type=int, default=-1, help="double mask")
     parser.add_argument("--reg", type=int, default=2, help="l1/l2 reg")
+    parser.add_argument("--ratio", type=float, default=0.2, help="data ratio")
     #image size, tal, lr ,reg ,up pe ratio
     args = parser.parse_args()
     torch.cuda.set_device(args.local_rank)
@@ -402,7 +433,14 @@ def main():
                 lbl_count+=num_lbl#num_pe+num_no)
                # print(threshold_min, pseudo_label)
         #print(f"recall pe: {detected/pos_count} acc pe {num_pe/(max_count+1)} acc_no: {num_no/(min_count+1)}  labels: {(max_count+min_count)/lbl_count}")
-        print(f"recall pe: {recall_score(gt[:lbl_count], preds[:lbl_count])} acc pe {precision_score(gt[:lbl_count], preds[:lbl_count])} labels: {lbl_count/val_size}")
+        #print("my recall", np.sum(preds[:lbl_count])/np.sum(gt[:lbl_count]), "my acc",np.sum((preds[:lbl_count]==gt[:lbl_count]))) 
+        rec=recall_score(gt[:lbl_count], preds[:lbl_count])
+        acc=accuracy_score(gt[:lbl_count], preds[:lbl_count])
+        per_labels= lbl_count/val_size
+        num_pe= np.sum(preds[:lbl_count])
+   
+        print(f"recall pe: {rec} per pe {precision_score(gt[:lbl_count], preds[:lbl_count])} acc pe {acc} labels: {lbl_count/val_size} num pe:{np.sum(preds[:lbl_count])} ")
+        return rec, acc, per_labels,num_pe
     # hyperparameters
     #samp_img, samp_lbl=x_u_split_equal(num_series//10,gt_ser,series_list_train, series_dict, image_dict)
     image_size = args.size#432#576
@@ -417,7 +455,7 @@ def main():
         batch_size = 8#32
      
     l1_lambda = 0.001
-    num_epoch = 10#1
+    num_epoch = 12#1
     best_auc=0
     # build model
     #if (args.pos>0) or (args.pre>0):
@@ -456,20 +494,29 @@ def main():
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_train_steps)
     print('opt')
     
+    #model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
     if args.resume >0:
         print('loading resumed')
-        checkpoint='test10/weights'+args.name+'/epoch{}'.format(args.ep0)
-        model.load_state_dict(torch.load(checkpoint,map_location='cpu'))
+        checkpoint='test10/weights'+args.name##+'/epoch{}'.format(args.ep0)
+        model.load_state_dict(torch.load(checkpoint + '/epoch{}'.format(args.ep0),map_location='cpu'))
+        model=model.to(args.device) or None  
         #doesn't work...
-        #optimizer.load_state_dict(torch.load(checkpoint))
-        #scheduler.load_state_dict(torch.load(checkpoint))
+        
+        ##optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4) #1e-4
+        ##scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_train_steps)
+        #optimizer.load_state_dict(torch.load(checkpoint+'/opt_epoch{}'.format(args.ep0),map_location='cpu'))
+        #optimizer=optimizer_to(optimizer, args.device)
+        #scheduler.load_state_dict(torch.load(checkpoint+'/scd_epoch{}'.format(args.ep0)))
 
-    model=model.to(args.device) or None   
+    
+    #optimizer.to(args.device) 
+    #if args.resume<0:
+    model=model.to(args.device) or None  
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
-    print('cre')
+    #print('cre', scheduler.get_last_lr())
     if args.fl >0:
-        criterion = WeightedFocalLoss(alpha=0.25, gamma=0.5).to(args.device)#
+        criterion = WeightedFocalLoss(alpha=0.20, gamma=0).to(args.device)#
         #criterion = FocalLoss().to(args.device)#
         print("alpha 0.25 gamma 0.5")
     else:
@@ -525,7 +572,9 @@ def main():
     
     print('iterator for validation')
     ######
-    image_list_valid=image_list_valid[:10000]
+    test_size=int(args.ratio*50000)
+    print('test size ', test_size)
+    image_list_valid=image_list_valid[:test_size]
     datagenV = PEDataset(image_dict=image_dict, bbox_dict=bbox_dict_valid, image_list=image_list_valid, target_size=image_size)
     generatorV = DataLoader(dataset=datagenV, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
     
@@ -552,11 +601,13 @@ def main():
     alpha=2*0.2/(len(labeled_dataset)/batch_size)
     epoch0+=1
     print('weak H strong H AFF RERACR')
-    print(threshold_max_base, threshold_min_base, name, 'weights_decay 5e-4', learning_rate, batch_size )
+    print(threshold_max_base, threshold_min_base, name, 'weights_decay 5e-4', learning_rate, batch_size , 'ep',epoch0)
     print('start trainnnnn')
     #dist_res= {'loss_train':[],'loss_x':[], 'loss_u':[], 'loss_val':[], 'num_lbl':[], 'num_pos':[]}
      
-
+    # if args.resume>0:
+    #     load_random_state()
+    #     #scheduler.step()
     for ep in range(epoch0,num_epoch+epoch0):
         losses = AverageMeter()
          
@@ -606,6 +657,7 @@ def main():
             (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
            # features, logits_x= model(images)
             batch_size = inputs_x.shape[0]
+            
             inputs = interleave(
                 torch.cat((inputs_x, inputs_u_w, inputs_u_s)), 2*mu+1).to(args.device)
             # #print('3')
@@ -625,9 +677,9 @@ def main():
             # 
              #Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
             Lx=criterion(logits_x.view(-1), labels)
-            if args.reg==1:
-                l1_norm = sum(p.abs().sum() for p in model.parameters())
-                Lx+=l1_norm
+            # if args.reg==1:
+            #     l1_norm = sum(p.abs().sum() for p in model.parameters())
+            #     Lx+=l1_lambda*l1_norm
             #Lx=torch.mean(Lx)
             
             pseudo_label = torch.sigmoid(logits_u_w.detach()/T)#, dim=-1) #softmax
@@ -637,9 +689,7 @@ def main():
                 
                 pseudo_label=pe_norm* pseudo_label
             
-            #if double mask: pred_s=torch.sigmoid(logits_u_s.detach())
-            # mask_s = pred_s.ge(threshold_max).float() + (pseudo_label.lt(threshold_min).float())
-            # mask=mask+mask_s
+           
             #print(pseudo_label.shape, pseudo_label.max().item())
             max_prob=(pseudo_label.ge(threshold_max).float())
             max_, targets_u = torch.max(pseudo_label, dim=-1)
@@ -660,7 +710,11 @@ def main():
                 eta_min=(fac/2)**(per_no-1)
                 threshold_max=eta_max*threshold_max_base     
                 threshold_min=eta_min*threshold_min_base 
-                
+
+            # if args.mask>0:
+            #     pred_s=torch.sigmoid(logits_u_s.detach())
+            #     mask_s = pred_s.ge(threshold_max).float() + (pred_s.lt(threshold_min).float())
+            #     mask=mask+mask_s   
            # print('probs:',logits_u_w.detach()/args.T)#, max_probs[:20])
             Lu= (F.binary_cross_entropy_with_logits(logits_u_s.view(-1), pseudo_label.view(-1),  reduction='none') * mask).mean()
             #Lu= (np.abs(pseudo_labels.view(-1)-)*F.binary_cross_entropy_with_logits(logits_u_s.view(-1), pseudo_label.view(-1),  reduction='none') * mask).mean()
@@ -699,19 +753,20 @@ def main():
             scheduler.step()
 
        # if args.local_rank == 0:
-
+        
         print('epoch: {}, train_loss: {} Lx: {} Lu: {} '.format(ep,losses.avg,losses_x.avg,losses_u.avg), flush=True)
         if args.local_rank in [-1, 0]:         
-
+                    print("lR", scheduler.get_last_lr())
                     writer.add_scalar('train_ep/1.train_loss', losses.avg, ep)
                     writer.add_scalar('train_ep/2.train_loss_x', losses_x.avg, ep)
                     writer.add_scalar('train_ep/3.train_loss_u', losses_u.avg, ep)
                     writer.add_scalar('train_ep/4.pe', num_pe/(num_lbl+1), ep)
                     writer.add_scalar('train_ep/5.lbl', num_lbl/len(unlabeled_dataset),ep)
+                    writer.add_scalar('train_ep/6.abs pe', num_pe, ep)
 #validaion phase
         
         model.eval()
-        validate(len(val_set))
+        rec, acc, per_labels,det_pe= validate(len(val_set))
         pos=0
         y_true=[]
         losses_val = AverageMeter()
@@ -734,7 +789,8 @@ def main():
                 #     pos+=lbl_num.sum()
                 #     idx=np.where(lbl_num>0)
                 #     #print(lbl_num.sum(), pred_prob[idx].mean())
-
+                # if i%200==0:
+                #     print("testing")
                 y_true.append(lbl_num)
                 #feature_val[start:end] = np.squeeze(features.cpu().data.numpy())
         y_true=np.concatenate(y_true)
@@ -751,6 +807,10 @@ def main():
         if args.local_rank == 0:
             writer.add_scalar('val_ep/1.val_loss', losses_val.avg, ep)
             writer.add_scalar('val_ep/2.val_auc', auc, ep)
+            writer.add_scalar('val_ep/3.recall', rec, ep)
+            writer.add_scalar('val_ep/4.accuracy', acc, ep)
+            writer.add_scalar('val_ep/1.labels', per_labels, ep)
+            writer.add_scalar('val_ep/2.abs pe', det_pe, ep)
             out_dir = 'test10/weights'+name+'/'
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
@@ -760,6 +820,7 @@ def main():
                 torch.save(model.module.state_dict(), out_dir+'epoch{}'.format(ep))
                 torch.save(optimizer.state_dict(), out_dir+'opt_epoch{}'.format(ep))
                 torch.save(scheduler.state_dict(), out_dir+'scd_epoch{}'.format(ep))
+                #save_random_state()
                 out_dir = 'test10/features0'+name+'/'
                 if not os.path.exists(out_dir):
                     os.makedirs(out_dir)

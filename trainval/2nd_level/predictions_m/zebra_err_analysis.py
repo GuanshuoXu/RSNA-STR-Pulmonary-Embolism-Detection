@@ -2,8 +2,12 @@ import numpy as np
 import streamlit as st
 import imageio
 from PIL import Image
+from matplotlib import pyplot as plt
+import os
+import pydicom
+import cv2
 
-# getting the predictions
+# getting the predictions and corresponding data
 pred= np.load('pred_prob_list_seresnext50_128.npy')
 gt= np.load('gt_list_seresnext50_128.npy')
 ids= np.load('id_list.npy')
@@ -13,7 +17,7 @@ tmp = list(map(lambda x: x.split('_',1), ids))#np.array([x.split('_',1) for x in
 
 
 
-
+#process the data into a data frame 
 studies=np.ndarray(len(tmp), dtype=object)
 types=np.ndarray(len(tmp), dtype=object)
 images=np.ndarray(len(tmp), dtype=object)
@@ -30,8 +34,13 @@ for l in lens:#[0:2]:#-1]:
     prev_study=l
     
 import pickle
-with open('../../process_input/split2/series_list_valid.pickle', 'rb') as f:
+up_path='../../'
+with open(up_path+'process_input/split2/series_list_valid.pickle', 'rb') as f:
     series_list_valid = pickle.load(f)
+with open(up_path+'process_input/split2/image_dict.pickle', 'rb') as f:
+        image_dict = pickle.load(f) 
+with open(up_path+'lung_localization/split2/bbox_dict_valid.pickle', 'rb') as f:
+        bbox_dict = pickle.load(f)
 tmp_ser= list(map(lambda x: tuple(x.split('_',1)), series_list_valid))
 dict_series = {x[0]:x[1] for x in tmp_ser}
 
@@ -47,37 +56,8 @@ preds_tbl.loc[preds_tbl.types=='negative_exam_for_pe', 'predicted']=1 -preds_tbl
 
  
 
-from sklearn.metrics import precision_score, recall_score,roc_auc_score, auc, precision_recall_curve, roc_curve, fbeta_score
-def scores(label, thresh=0.5, verbose=True):
-    pred_pos=preds_tbl[(preds_tbl.types==label)&(preds_tbl.labels==1.0)].predicted.mean()
-    total=preds_tbl[preds_tbl.types==label].shape[0]
-    neg_pes=preds_tbl[(preds_tbl.types==label)]# & (err_tbl.diff<0.5) ]
-    neg_pes_preds=neg_pes.predicted.values
-    neg_pes_lbls=neg_pes.predicted.values >= thresh
-    neg_pes_gt=neg_pes.labels.values
-    num_pos=neg_pes_gt.sum()
-    num_pred=neg_pes_lbls.sum()
-    roc_auc=roc_auc_score(neg_pes_gt,neg_pes_preds, average='micro')
-    recall=recall_score(neg_pes_gt,neg_pes_lbls)
-    precision=precision_score(neg_pes_gt,neg_pes_lbls)
-    precision1, recall1, _ = precision_recall_curve(neg_pes_gt,neg_pes_preds)
-    auc2=auc(recall1, precision1)
-    f2=fbeta_score(neg_pes_gt,neg_pes_lbls, beta=2)
-    if verbose:
-        print(f'Number of positive series - {num_pos} out of total {total}')
-        print('auc for roc:', roc_auc)
-        print('recall:', recall, ' predicted ', neg_pes_lbls.sum(), ' avg. pos prediction ', pred_pos)
-        print('precision:', precision)
-        #
-        #recall, precision, _ = roc_curve(neg_pes_gt,neg_pes_preds)
-        print('f_bta', f2)
-        print('auc precision-recall', auc2)
-    return [total, num_pos, roc_auc, precision, recall, num_pred,pred_pos,f2,auc2]
 
-
-# In[211]:
-
-
+#get the slices associated with the label
 def slices4label(tbl,label, df_lbl=None,thresh_lbl=0.7, thresh_pe=0.7):
     if df_lbl is None:
         df_lbl= tbl[(tbl.types==label) & (tbl.dif>=thresh_lbl)].sort_values(by='dif', ascending=False)
@@ -95,74 +75,8 @@ def slices4label(tbl,label, df_lbl=None,thresh_lbl=0.7, thresh_pe=0.7):
     return dict_slices, df_lbl, df_slices
 
 
-# In[212]:
-
-
-def fn_fp(label):
-    df_fn=preds_tbl[(preds_tbl.types==label)&(preds_tbl.labels==1.0) & (preds_tbl.predicted<0.5)]
-    df_fp=preds_tbl[(preds_tbl.types==label)&(preds_tbl.labels==0.0) & (preds_tbl.predicted>=0.5)]
-    return df_fn, df_fp
-
-
-# In[213]:
-
-
-def analyze_label(label, thresh=0.5):
-   
-    df_fn, df_fp = fn_fp(label)
-    #print(df_fp)
-    _,_, slices_fn=slices4label(preds_tbl,label,df_fn,-9,-9)
-    _,_, slices_fp=slices4label(preds_tbl,label,df_fp,-9,-9)
-    scores(label, thresh)
-   # fn_pred, fp_pred= fn_fp('pe_slice')
-    #print(fp_pred)
-    print(f'\nstats for {df_fn.shape[0]} false negative series')
-    dict_fn=stats_label(slices_fn, label, df_fn)#,df_fn.shape[0],'blue')
-    dict_pred=stats_label(preds_tbl[(preds_tbl.types=='pe_slice')],'pe_slice',preds_tbl[(preds_tbl.types==label)])
-    plot_stat(dict_fn,dict_pred)
-    print(f'stats for {df_fp.shape[0]} false positive series')
-    stats_label(slices_fp, df_fp.shape[0])
-    dict_fp=stats_label(slices_fp, label, df_fp)#, df_fp.shape[0],'red')
-    #plot_stat(dict_fp,dict_pred)
-    #_, df_lbl, slices_lbl= slices4label(preds_tbl, label,preds_tbl[(preds_tbl.types==label) &(preds_tbl.labels==0.0) ],-8,-9)
-    #dict_lbl=stats_label(slices_lbl,label,df_lbl)#,preds_tbl[(preds_tbl.types==label) &(preds_tbl.labels==1.0) ])
-    #plot_scatter(dict_lbl)
-    return slices_fn, slices_fp#, dict_fn,dict_fp
-
-
-
-
-def stats_label(slices_lbl, label, df_lbl=None,num_series=0):
-    probs=None
-    if not df_lbl is None:
-        probs =df_lbl.predicted 
-    ser_size=slices_lbl.groupby('studies').labels.size()#.mean()
-    pe_freq=slices_lbl.groupby('studies').labels.mean()#.mean()
-    
-    d,=np.where(pe_freq==0)
-    #print(slices_lbl.groupby('studies').index[d])
-    #print(pe_freq.index.get_level_values(0)[d])
-    #plt.plot(range(num_series),pe_freq)
-    pe_max=slices_lbl.groupby('studies').predicted.max()
-    #pe_freq.hist()
-    err_freq=slices_lbl.groupby('studies').err.mean()#.mean()
-    #sns.histplot(err_freq,stat='probability', color=color).set_title('mean error across studies')#' density=True, histtype='step')
-    
-    err_freq1=slices_lbl[slices_lbl.labels==1.0].groupby('studies').err.mean()#.mean()
-    err_freq0=slices_lbl[slices_lbl.labels==0.0].groupby('studies').err.mean()#.mean()
-    df=preds_tbl[preds_tbl.studies.isin(err_freq1.index.get_level_values(0))]
-    
-    #print(1-slices_lbl.groupby('studies').err.mean(), slices_lbl.groupby('studies').err.mean())
-    pe_correct_freq=1-err_freq1#slices_lbl.groupby('studies').err.mean()
-    prob_lbl = preds_tbl[(preds_tbl.types==label) &(preds_tbl.labels==1.0) ].predicted
-    dict_stat={'pe_freq':pe_freq,'pe err_freq':err_freq,'err_freq for pe=0':err_freq0, 'err_freq for pe=1':err_freq1, 'max prob':pe_max}
-    dict_stat['probs']=df[df.types==label].predicted#probs
-    dict_stat['label']=label
-    dict_stat['label predictions']=prob_lbl
-    dict_stat['correct pe %'] = pe_correct_freq
-    return dict_stat
-
-def show_errors(label, bGif = False):
+#Main function - gets the label to show
+def show_errors(label):
     df_pos=preds_tbl[(preds_tbl.types==label)&(preds_tbl.labels==1.0)]
     df_neg=preds_tbl[(preds_tbl.types==label)&(preds_tbl.labels==0.0)]
     #dict_fn ,df_fn, slices_fn = slices4label(preds_tbl, label, df_pos, -9, -9)
@@ -172,25 +86,33 @@ def show_errors(label, bGif = False):
     if st.radio('Choose', ['positive', 'false positive'])=='positive':
         df_err=df_pos
         types='positive'
+        slider_txt="PE probabilty predicted for image is smaller or equal to"
     else:
         df_err=df_neg
         types='false positive'
+        slider_txt='PE probabilty predicted for image is bigger than'
     
     #filtering indeterminate studies
     indeter=preds_tbl[(preds_tbl.types=='indeterminate') & (preds_tbl.labels==1.0)].studies.values
     df_err=df_err[~df_err.studies.isin(indeter)]#stud_lbl=np.setdiff1d(stud_lbl, indeter)
     
     dict_err ,df,slices_err = slices4label(preds_tbl, label, df_err, -9, -9)
-    prob=st.slider('PE probabilty predicted for image is smaller or equal to',0.0,1.0,0.05)
-    df_sort = df_err[df_err.predicted <= prob].sort_values(by='predicted', ascending=False)
+    prob=st.slider(slider_txt,0.0,1.0,0.05)
+    if types=='positive':
+        df_sort = df_err[df_err.predicted <= prob].sort_values(by='predicted', ascending=False)
+    else:
+        df_sort = df_err[df_err.predicted >= prob].sort_values(by='predicted', ascending=True)
     #print(df_sort)
     studies=df_sort.studies.values
-    study_idx= st.slider('Image (study) #', 0, len(studies), 0)  # min: 0h, max: 23h, default: 17h
+    study_idx= st.slider('Image (study) #', 0, len(studies)-1, 0)  # min: 0h, max: 23h, default: 17h
+    if study_idx<0:
+        print('no studies to show')
+        return
     study=studies[study_idx]
         #study = st.text_input('study name', 'bc60cab42620')
     path = study + '//' + dict_series[study]
         
-    folder_path = r"../../../input/train"
+    folder_path = up_path +'../input/train' ###r"../../../input/train"
     file_path = os.path.join(folder_path,path)
     try:
 
@@ -217,16 +139,14 @@ def show_errors(label, bGif = False):
     st.write(study + ' has ', len(slices2show),  ' ' + types + ' slices out of ', len(slices), ' slices')
     option=st.radio('show',['gif', 'every fifth slice', 'specific','grid'])
     if option=='gif':#bGif
-        #path = study + '//' + dict_series[study]
         
-        #folder_path = r"../../../input/train"
         file_path = os.path.join(folder_path,path)
 
         first_patient= load_slice(file_path,slices2show)
         first_patient_pixels = transform_to_hu(first_patient)
         
         imageio.mimsave("/tmp/gif.gif", first_patient_pixels, duration=0.1)
-        #image=Image.open("/tmp/gif.gif")
+         
         st.image("/tmp/gif.gif")
     
     
@@ -239,10 +159,7 @@ def show_errors(label, bGif = False):
             
             slice = slices2show[slice_idx]
             idx=dict_idx[slice]
-        # # file_name = slice +'.dcm'
-            #path = study + '//' + dict_series[study]
-        # # file_path = os.path.join(path,file_name)
-        # prob_lbl = round(df_err[df_err['studies'] == study].predicted.values[0], 3)
+        
 
             prob_pe = slices_err[slices_err['slices'] == slice].predicted.values[0]
         
@@ -255,16 +172,17 @@ def show_errors(label, bGif = False):
         idx=st.number_input('slice index:', 0)
         #path = study + '//' + dict_series[study]
         slice=slices[idx]
-        title=f'index:{idx}'
+        prob_pe = slices_err[slices_err['slices'] == slice].predicted.values[0]
+        
+        pe_label=slices_err[slices_err['slices'] == slice].labels.values[0]
+        title = f'index={idx}, pe_slice={pe_label}, prob pe 4 image={prob_lbl:.3f}, prob pe 4 slice={prob_pe:.3f}'
         show_image2(path, slice, title)
     else:
         plot_multi(study,slices2show, slices_err,prob,dict_idx)
 
 
 
-from matplotlib import pyplot as plt
-import os
-import pydicom
+
 
 def window(x, WL=50, WW=350):
     upper, lower = WL+WW//2, WL-WW//2
@@ -296,7 +214,7 @@ def transform_to_hu(slices):
     return np.array(images, dtype=np.int16)
 
 
-def show_image2(series, image, title):
+def show_image2(series, image, title, size=576):
     # Call the local dicom file
     folder_path = r"../../../input/train"
     file_path = os.path.join(folder_path, series)
@@ -304,22 +222,23 @@ def show_image2(series, image, title):
     file_path = os.path.join(file_path, file_name)
     print(file_path)
     fig = plt.figure(figsize=(20, 20), dpi=300)
-    # fig, axs = plt.subplots(2, 3, figsize=(10, 3))
-    # fig, axs = plt.subplots(1, 3, figsize=(10, 3))
-    # print(axs.shape)
-    # for i in range(4):
+    
     ds = pydicom.dcmread(file_path)
     x1 = ds.pixel_array.astype(np.float32)
     x1 = x1*ds.RescaleSlope+ds.RescaleIntercept
-    img = window(x1, WL=100, WW=700)
+    x = window(x1, WL=100, WW=700)
     #first_patient_pixels = transform_to_hu([ds])
+    bbox = bbox_dict[image_dict[image]['series_id']]
+    #x = x[bbox[1]+20:bbox[3]-20,bbox[0]+20:bbox[2]-20]
+    x = x[bbox[1]:bbox[3],bbox[0]:bbox[2]]
+    x = cv2.resize(x, (size,size))
     plt.title(title, fontdict = {'fontsize' : 20})
     # fig.add_subplot(2, 2, i+1)
-    plt.imshow(img, cmap=plt.cm.bone) #first_patient_pixels[0],
+    plt.imshow(x, cmap=plt.cm.bone) #first_patient_pixels[0],
     # st.image(first_patient_pixels[0], clamp=True)
     st.pyplot(fig, dpi=300)
-    # ax[1].imshow(first_patient_pixels[0],cmap=plt.cm.bone)
-    # plt.show()
+   
+   
 def prepare_image(series, image):
 # Call the local dicom file 
     folder_path = r"../../../input/train"
@@ -331,9 +250,11 @@ def prepare_image(series, image):
     #first_patient_pixels = transform_to_hu([ds])
     x1 = ds.pixel_array.astype(np.float32)
     x1 = x1*ds.RescaleSlope+ds.RescaleIntercept
-    img = window(x1, WL=100, WW=700)
-    return img#first_patient_pixels[0]
+    x = window(x1, WL=100, WW=700)
+    
+    return x#first_patient_pixels[0]
 
+#grid plot
 def plot_multi(study,slices, df_slices,prob_lbl, dict_index,n_col=4):
     n_col=min(2,len(slices))
     step=1+int((len(slices)-16)/16)
@@ -362,36 +283,7 @@ def plot_multi(study,slices, df_slices,prob_lbl, dict_index,n_col=4):
         #ax[int(i/n_col),int(i % n_row)].axis('off')
         j=j+1
     st.pyplot(fig, dpi=300)
-    
-# def show_study2(dict_slices, df_lbl, df_slice, study="", threshold=-9, num_studies=5, num_slices=12, n_col=4):
-#     if threshold > 0:
-#         studies = df_lbl[df_lbl.dif >= threshold].studies.values
-#     else:
-#         studies = df_lbl.studies.values
-#     if study == "":
-#         # study_idx= st.slider('Image (study)', 0, len(studies), 0)  # min: 0h, max: 23h, default: 17h
-#         # study=studies[study_idx]
-#         study = st.text_input('study name', 'bc60cab42620')
-#         print(study)
-#     try:
 
-#         slices = dict_slices[study]
-#     except:
-#         st.write(study)
-
-#         st.write('no erronious slices to show')
-#         return
-
-#     slice_idx = st.slider('Slice', 0, len(slices), 0)
-#     slice = slices[slice_idx]
-#     # file_name = slice +'.dcm'
-#     path = study + '//' + dict_series[study]
-#     # file_path = os.path.join(path,file_name)
-
-#     diff_lbl = round(df_lbl[df_lbl['studies'] == study].dif.values[0], 3)
-#     diff_pe = round(df_slice[df_slice['slices'] == slice].dif.values[0], 3)
-#     title = f'diff label={diff_lbl}, diff pe={diff_pe}'
-#     show_image2(path, slice, title)
 def load_slice(path,slices2show):
     slices = [pydicom.read_file(path + '/' + s+'.dcm') for s in slices2show]
     slices.sort(key = lambda x: float(x.ImagePositionPatient[2]))
@@ -404,7 +296,7 @@ def load_slice(path,slices2show):
         s.SliceThickness = slice_thickness
         
     return slices
-show_errors('negative_exam_for_pe') #acute_and_chronic_pe
+show_errors('negative_exam_for_pe')#chronic_pe') #acute_and_chronic_pe negative_exam_for_pe
     
     
     

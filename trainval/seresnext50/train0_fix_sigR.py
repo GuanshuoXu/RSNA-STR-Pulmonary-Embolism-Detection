@@ -42,8 +42,50 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+class PEDataset(Dataset):
+    def __init__(self, image_dict, bbox_dict, image_list, target_size, transform=None):
+        self.image_dict=image_dict
+        self.bbox_dict=bbox_dict
+        self.image_list=image_list
+        self.target_size=target_size
+        self.transform=transform
+    def __len__(self):
+        return len(self.image_list)
+    def __getitem__(self,index):
+        study_id = self.image_dict[self.image_list[index]]['series_id'].split('_')[0]
+        series_id = self.image_dict[self.image_list[index]]['series_id'].split('_')[1]
+        data1 = pydicom.dcmread('../../input/train/'+study_id+'/'+series_id+'/'+self.image_dict[self.image_list[index]]['image_minus1']+'.dcm')
+        data2 = pydicom.dcmread('../../input/train/'+study_id+'/'+series_id+'/'+self.image_list[index]+'.dcm')
+        data3 = pydicom.dcmread('../../input/train/'+study_id+'/'+series_id+'/'+self.image_dict[self.image_list[index]]['image_plus1']+'.dcm')
+        x1 = data1.pixel_array
+        x2 = data2.pixel_array
+        x3 = data3.pixel_array
+        x1 = x1*data1.RescaleSlope+data1.RescaleIntercept
+        x2 = x2*data2.RescaleSlope+data2.RescaleIntercept
+        x3 = x3*data3.RescaleSlope+data3.RescaleIntercept
+        x1 = np.expand_dims(window(x1, WL=100, WW=700), axis=2)
+        x2 = np.expand_dims(window(x2, WL=100, WW=700), axis=2)
+        x3 = np.expand_dims(window(x3, WL=100, WW=700), axis=2)
+        x = np.concatenate([x1, x2, x3], axis=2)
+        bbox = self.bbox_dict[self.image_dict[self.image_list[index]]['series_id']]
+        x = x[bbox[1]:bbox[3],bbox[0]:bbox[2],:]
+        x = cv2.resize(x, (self.target_size,self.target_size))
+        if self.transform is None:
+            x = transforms.ToTensor()(x)
+            x = transforms.Normalize(mean=[0.456, 0.456, 0.456], std=[0.224, 0.224, 0.224])(x)
+        else:
+            x = self.transform(image=x)['image']
+            x = x.transpose(2, 0, 1)
+        y = self.image_dict[self.image_list[index]]['pe_present_on_image']
+        return x, y
  
-
+def window(img, WL=50, WW=350):
+    upper, lower = WL+WW//2, WL-WW//2
+    X = np.clip(img.copy(), lower, upper)
+    X = X - np.min(X)
+    X = X / np.max(X)
+    X = (X*255.0).astype('uint8')
+    return X
 class seresnext50(nn.Module):
     def __init__(self ):
         super().__init__()

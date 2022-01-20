@@ -34,6 +34,8 @@ class BboxCollator(object):
     def _load_dicom_array(self, f):
         dicom_files = glob.glob(os.path.join(f, '*.dcm'))
         dicoms = [pydicom.dcmread(d) for d in dicom_files]
+        if len(dicoms) <1 :
+            return
         M = np.float32(dicoms[0].RescaleSlope)
         B = np.float32(dicoms[0].RescaleIntercept)
         z_pos = [float(d.ImagePositionPatient[-1]) for d in dicoms]
@@ -53,6 +55,8 @@ class BboxCollator(object):
         series_id = self.series_list[batch_idx[0]].split('_')[1]
         series_dir = '../../../input/train/' + study_id + '/'+ series_id
         dicoms, dicom_files, selected_dicom_files = self._load_dicom_array(series_dir)
+        if dicoms is None:
+            return
         image_list = []
         for i in range(len(dicom_files)):
             name = dicom_files[i][-16:-4]
@@ -99,7 +103,7 @@ def main():
 
     # build model
     model = efficientnet()
-    model.load_state_dict(torch.load('weights/epoch34_polyak'))
+    model.load_state_dict(torch.load('weights/epoch34'))#_polyak'))
     model = model.cuda()
     model.eval()
 
@@ -112,7 +116,10 @@ def main():
     collate_fn = BboxCollator(series_list=series_list)
     generator = DataLoader(dataset=datagen, collate_fn=collate_fn, batch_size=1, shuffle=False, num_workers=20, pin_memory=True)
     total_steps = len(generator)
+    print(total_steps)
     for i, (images, image_list, selected_image_list, series_id) in tqdm(enumerate(generator), total=total_steps):
+        if image_list is None:
+            return
         with torch.no_grad():
             start = i*4
             end = start+4

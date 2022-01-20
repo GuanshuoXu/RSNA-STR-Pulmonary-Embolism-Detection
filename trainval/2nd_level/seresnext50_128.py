@@ -90,13 +90,15 @@ class PEDataset(Dataset):
     def __getitem__(self,index):
         image_list = self.series_dict[self.series_list[index]]['sorted_image_list'] 
         if len(image_list)>self.seq_len:
-            x = np.zeros((len(image_list), self.feature_array.shape[1]*3), dtype=np.float32)
+            #####x = np.zeros((len(image_list), self.feature_array.shape[1]*3), dtype=np.float32)
+            x = np.zeros((self.seq_len, self.feature_array.shape[1]*3), dtype=np.float32)
             y_pe = np.zeros((len(image_list), 1), dtype=np.float32)
             mask = np.ones((self.seq_len,), dtype=np.float32)
-            for i in range(len(image_list)):      
+            idx=np.random.choice(len(image_list),size=self.seq_len, replace=False)
+            for i in idx:###range(len(image_list)):      
                 x[i,:self.feature_array.shape[1]] = self.feature_array[self.image_to_feature[image_list[i]]] 
                 y_pe[i] = self.image_dict[image_list[i]]['pe_present_on_image']
-            x = cv2.resize(x, (self.feature_array.shape[1]*3, self.seq_len), interpolation = cv2.INTER_LINEAR)
+            ###x = cv2.resize(x, (self.feature_array.shape[1]*3, self.seq_len), interpolation = cv2.INTER_LINEAR)
             y_pe = np.squeeze(cv2.resize(y_pe, (1, self.seq_len), interpolation = cv2.INTER_LINEAR))
         else:
             x = np.zeros((self.seq_len, self.feature_array.shape[1]*3), dtype=np.float32)
@@ -228,7 +230,7 @@ criterion1 = nn.BCEWithLogitsLoss().cuda()
 
 # training
 
-# iterator for training
+# # iterator for training
 train_datagen = PEDataset(feature_array=feature_train,
                           image_to_feature=image_to_feature_train,
                           series_dict=series_dict,
@@ -348,7 +350,11 @@ for ep in range(num_epoch):
     losses_lt = AverageMeter()
     losses_chronic = AverageMeter()
     losses_acute_and_chronic = AverageMeter()
-    model.eval()
+    model_lv21 = PENet(input_len=feature_size, lstm_size=lstm_size)
+    #model.load_state_dict(torch.load('seresnext50_128'))
+    model = model.cuda()
+    model_lv21.eval()
+    #model.eval()
     for j, (x, y_pe, mask, y_npe, y_idt, y_lpe, y_rpe, y_cpe, y_gte, y_lt, y_chronic, y_acute_and_chronic, series_list) in enumerate(valid_generator):
         with torch.no_grad():
             start = j*batch_size

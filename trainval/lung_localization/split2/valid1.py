@@ -131,7 +131,7 @@ def main():
 
         # build model
         model = efficientnet()
-        model.load_state_dict(torch.load('weights/'+ckp+'_polyak'))
+        model.load_state_dict(torch.load('weights/'+ckp))#+'_polyak'))
         model = model.cuda()
         optimizer = optim.Adam(model.parameters(), lr=0.0001)
         model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)

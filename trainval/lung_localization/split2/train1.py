@@ -64,7 +64,7 @@ class PEDataset(Dataset):
         x[:,:,1] = x1
         x[:,:,2] = x1
         x = cv2.resize(x, (self.target_size,self.target_size))
-        bboxes = [self.bbox_dict[self.image_list[index]]]
+        bboxes = [self.bbox_dict.get(self.image_list[index], [0,0,1,1])]
         class_labels = ['lung']
         transformed = self.transform(image=x, bboxes=bboxes, class_labels=class_labels)
         x = transformed['image']
@@ -132,7 +132,7 @@ def main():
 
     # hyperparameters
     learning_rate = 0.00004
-    batch_size = 32
+    batch_size = 16#32
     image_size = 512
     num_polyak = 32
     num_epoch = 30
@@ -147,6 +147,7 @@ def main():
         model.load_state_dict(torch.load('weights/epoch19'))
     model.to(args.device)
 
+    print("debug-optim")
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     model, optimizer = amp.initialize(model, optimizer, opt_level="O1",verbosity=0)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
@@ -170,7 +171,7 @@ def main():
     for ep in range(20,num_epoch):
         losses = AverageMeter()
         model.train()
-        for j,(images,labels) in enumerate(generator):
+        for j,(images,labels) in tqdm(enumerate(generator)):
             images = images.to(args.device)
             labels = labels.to(args.device)
 
@@ -183,17 +184,17 @@ def main():
                 scaled_loss.backward()
             optimizer.step()
 
-            if args.local_rank == 0:
-                if j==len(generator)-num_polyak:
-                    #print("Polyak averaging start ...")
-                    averaged_model = copy.deepcopy(model)
-                if j>len(generator)-num_polyak:
-                    for k in averaged_model.module.state_dict().keys():
-                        averaged_model.module.state_dict()[k].data += model.module.state_dict()[k].data
-                if j==len(generator)-1:
-                    for k in averaged_model.module.state_dict().keys():
-                        averaged_model.module.state_dict()[k].data /= num_polyak
-                    #print("Polyak averaging end ...")
+            # if args.local_rank == 0:
+            #     if j==len(generator)-num_polyak:
+            #         #print("Polyak averaging start ...")
+            #         averaged_model = copy.deepcopy(model)
+            #     if j>len(generator)-num_polyak:
+            #         for k in averaged_model.module.state_dict().keys():
+            #             averaged_model.module.state_dict()[k].data += model.module.state_dict()[k].data
+            #     if j==len(generator)-1:
+            #         for k in averaged_model.module.state_dict().keys():
+            #             averaged_model.module.state_dict()[k].data /= num_polyak
+            #         #print("Polyak averaging end ...")
 
         if args.local_rank == 0:
             print('epoch: {}, train_loss: {}'.format(ep,losses.avg), flush=True)
@@ -203,7 +204,7 @@ def main():
             if not os.path.exists(out_dir):
                 os.makedirs(out_dir)
             torch.save(model.module.state_dict(), out_dir+'epoch{}'.format(ep))
-            torch.save(averaged_model.module.state_dict(), out_dir+'epoch{}_polyak'.format(ep))
+            #torch.save(averaged_model.module.state_dict(), out_dir+'epoch{}_polyak'.format(ep))
 
 if __name__ == "__main__":
     main()

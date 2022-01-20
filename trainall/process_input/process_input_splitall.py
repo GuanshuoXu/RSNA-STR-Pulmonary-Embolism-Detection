@@ -10,11 +10,14 @@ from sklearn.model_selection import train_test_split
 
 def get_dicom_array(f):
     dicom_files = glob.glob(os.path.join(f, '*.dcm'))
-    dicoms = [pydicom.dcmread(d) for d in dicom_files]
-    z_pos = [float(d.ImagePositionPatient[-1]) for d in dicoms]
+    dicoms = [pydicom.dcmread(d, force=True) for d in dicom_files]
+    
+    exposure = [float(d.get('Exposure',0)) for d in dicoms]
+    
+    z_pos = [float(d.get('ImagePositionPatient',[0,0])[-1]) for d in dicoms]
     sorted_idx = np.argsort(z_pos)
-    exposure = [float(d.Exposure) for d in dicoms]
-    thickness = [float(d.SliceThickness) for d in dicoms]
+    
+    thickness = [float(d.get('SliceThickness',0)) for d in dicoms]
     return np.asarray(dicom_files)[sorted_idx], np.asarray(z_pos)[sorted_idx], np.asarray(exposure)[sorted_idx], np.asarray(thickness)[sorted_idx]
 
 df = pd.read_csv('../../input/train.csv')
@@ -71,10 +74,15 @@ for i in tqdm(range(len(series_id_list))):
     series_list.append(series_id)
 series_list = sorted(list(set(series_list)))
 print(len(series_list), len(series_dict), len(image_dict))
+num_f=0
 for series_id in tqdm(series_dict, total=len(series_dict)):
     series_dir = '../../input/train/' + series_id.split('_')[0] + '/'+ series_id.split('_')[1]
     file_list, z_pos_list, exposure_list, thickness_list = get_dicom_array(series_dir)
+    if len(file_list)== 0:
+        print(series_id)
+        continue
     image_list = []
+    num_f=num_f+len(file_list)
     for i in range(len(file_list)):
         name = file_list[i][-16:-4]
         image_list.append(name)
@@ -92,7 +100,9 @@ for series_id in tqdm(series_dict, total=len(series_dict)):
         image_dict[name]['thickness'] = thickness_list[i]
     series_dict[series_id]['sorted_image_list'] = image_list   
 print(series_dict[series_list[0]])
+print(image_list[0])
 print(image_dict[image_list[0]])
+print("kkk", num_f)
 
 
 np.random.seed(100)
@@ -110,6 +120,7 @@ print(image_list_train[:3])
 
 
 out_dir = 'splitall/'
+print('END')
 if not os.path.exists(out_dir):
     os.makedirs(out_dir)
 with open(out_dir+'series_dict.pickle', 'wb') as f:
